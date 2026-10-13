@@ -1,0 +1,16 @@
+services:
+  n8n:
+    # 2.40.7 is the n8n version the workflows were developed against.
+    image: docker.n8n.io/n8nio/n8n:2.40.7
+    ports:
+      - "5678:5678"
+    environment:
+      # Set both to your IANA timezone (e.g. Europe/Berlin, America/New_York, Asia/Tokyo).
+      # The workflows have no timezone of their own, so the daily 09:00 schedule uses this one.
+      - GENERIC_TIMEZONE=UTC
+      - TZ=UTC
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  n8n_data:

@@ -1,0 +1,50 @@
+# Secrets and local config
+.env
+.env.*
+!.env.example
+.sanitize-denylist*
+*denylist*
+*.pem
+*.key
+*.p12
+credentials*.json
+
+# Raw n8n exports, backups and data (sanitize into workflows/ instead).
+# Only workflows/*.json is meant to be committed; JSON anywhere else is ignored.
+*.json
+!workflows/*.json
+*.backup*
+*.raw.json
+backups/
+exports/
+n8n_data/
+.n8n/
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.db
+*.csv
+*.tsv
+*.xlsx
+
+# Execution artifacts and generated application material
+executions/
+output/
+*.log
+*.har
+*.pdf
+*.docx
+resume*
+cover-letter*
+coverletter*
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+
+# Images: only files explicitly listed here are part of the repository
+images/*
+!images/final-architecture.png

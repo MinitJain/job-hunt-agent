@@ -1,0 +1,2059 @@
+{
+  "name": "Job Hunt Agent v2",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "824b9457-7bd0-502f-be32-f3449d18ac7a",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "647d7cd7-de76-5d0e-a8b4-bc544e8fb0a3",
+      "name": "Daily 9:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        688
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =====================================================================\n//  JOB HUNT AGENT v2 — CONFIG + PROFILE\n// =====================================================================\n// Everything downstream reads from this node via $('Config & Profile').\n// Only put REAL facts in `profile`.\n// Generators are instructed to use nothing outside this profile.\n// =====================================================================\n\nconst config = {\n  model: 'google/gemini-3.1-flash-lite',\n\n  // Cost control: keep runs bounded.\n  maxAiJobsPerRun: 10,\n  maxPackagesPerRun: 5,\n  minMatchScore: 60,\n  minSkillsScore: 15,\n\n  // Deterministic filter\n  maxYearsExperience: 3,\n\n  // EDIT: where you can work. Matching is a lower-case substring test.\n  locationPolicy: {\n    acceptRemote: true,\n\n    // Remote jobs are kept when their region text is empty or contains one of these.\n    // Add your country / region, e.g. 'europe', 'emea', 'latam', 'usa', 'canada', 'india', 'apac'.\n    acceptedRemoteRegions: [\n      'worldwide',\n      'anywhere',\n      'global',\n    ],\n\n    // On-site / hybrid jobs are kept only when their location contains one of these.\n    // Empty = on-site jobs are all dropped. Add your country and cities, e.g. 'germany', 'berlin'.\n    acceptedLocations: [],\n  },\n\n  // Direct company job boards via PUBLIC ATS APIs. No login, no scraping.\n  // EDIT: add the companies you want to follow. Empty = source reported as NOT CONFIGURED.\n  // `board` is the company's slug on that ATS. Check it first in a browser:\n  //   Greenhouse: https://boards-api.greenhouse.io/v1/boards/<board>/jobs\n  //   Lever:      https://api.lever.co/v0/postings/<board>?mode=json\n  // Format: { board: '<slug>', company: '<display name>' }\n  atsBoards: {\n    greenhouse: [],\n    lever: [],\n  },\n\n  // Notification (optional).\n  // Paste your Discord channel webhook URL here when ready.\n  discord: {\n  jobsWebhookUrl: '',\n  healthWebhookUrl: '',\n},\n\n  // Tracker workflow.\n  trackerBaseUrl: 'http://localhost:5678/webhook/job-hunt',\n\n  // Questions answered for every shortlisted job.\n  applicationQuestions: [\n    'Why do you want to work at this company?',\n    'Why are you a good fit for this role?',\n    'Describe a project you built that is relevant to this role.',\n    'What is your availability / start date?',\n  ],\n};\n\nconst profile = {\n  // EXAMPLE PROFILE — replace every value with your own REAL facts.\n  // The generators may only use what is written here.\n  name: 'Alex Example',\n  email: 'alex@example.com',\n  phone: '+00 00000 00000',\n\n  // Country you live in / can work from. The analysis prompt scores location against it.\n  location: 'Example Country',\n\n  links: {\n    github: 'https://github.com/your-username',\n    linkedin: 'https://www.linkedin.com/in/your-profile/',\n    portfolio: 'https://example.com/',\n  },\n\n  education: {\n    status: 'third-year undergraduate student',\n    degree: 'Bachelor of Engineering in Information Technology',\n    institution: 'Example Institute of Technology',\n    location: 'Example City, Example Country',\n    expectedGraduation: '2028',\n  },\n\n  availability:\n    'Available for a full-time internship during summer break; part-time during the semester.',\n\n  targetRoles: [\n    'Software Developer Intern',\n    'Backend Engineer Intern',\n    'Graduate Software Engineer',\n  ],\n\n  interests: [\n    'developer tooling',\n    'databases',\n    'web services',\n  ],\n\n  skills: {\n    languages: ['TypeScript', 'JavaScript', 'SQL', 'Python'],\n    frontend: ['React', 'Tailwind CSS'],\n    backend: ['Node.js', 'Express.js', 'REST APIs'],\n    ai: [],\n    databases: ['PostgreSQL', 'Redis'],\n    devops: ['Docker', 'GitHub Actions', 'Linux'],\n    other: ['Web services', 'Developer tooling'],\n  },\n\n  projects: [\n    {\n      name: 'Example Notes API',\n      summary: 'REST API for personal notes with full-text search.',\n      tech: ['Node.js', 'Express.js', 'PostgreSQL', 'Docker'],\n      repo: 'https://github.com/your-username/example-notes-api',\n      highlights: [\n        'Built a REST API for creating, tagging and searching notes.',\n        'Implemented PostgreSQL full-text search.',\n        'Packaged the service with Docker.',\n      ],\n    },\n    {\n      name: 'Example Dashboard',\n      summary: 'React dashboard that visualises data from a public API.',\n      tech: ['React', 'TypeScript', 'Tailwind CSS'],\n      repo: 'https://github.com/your-username/example-dashboard',\n      highlights: [\n        'Built a responsive dashboard with React and TypeScript.',\n        'Added client-side caching of API responses.',\n      ],\n    },\n  ],\n\n  openSource: [\n    {\n      project: 'Example OSS Library',\n      contribution: 'Fixed an off-by-one error in pagination and added a regression test.',\n      tech: ['TypeScript'],\n      url: 'https://github.com/example-org/example-lib/pull/1',\n    },\n  ],\n\n  experience: [\n    {\n      role: 'Software Engineering Intern',\n      organization: 'Example Company',\n      location: 'Remote',\n      start: '2025-06',\n      end: '2025-08',\n      bullets: [\n        'Added input validation to three REST endpoints.',\n        'Wrote integration tests for the billing service.',\n      ],\n    },\n  ],\n};\n\n// Flat list used for cheap keyword scoring.\nconst skillList = Object.values(profile.skills).flat();\n\n// Authoritative whitelists derived from the profile (never from model output).\n// skillWhitelist: the ONLY skills that may be treated as the candidate's (declared skills + tech of own projects).\n// projectTech: the ONLY technologies a generated sentence may attach to each project.\nconst skillWhitelist = [...new Set([...skillList, ...profile.projects.flatMap((p) => p.tech)])];\nconst projectTech = Object.fromEntries(profile.projects.map((p) => [p.name, p.tech]));\n\nreturn [\n  {\n    json: {\n      config,\n      profile,\n      skillList,\n      skillWhitelist,\n      projectTech,\n      runStartedAt: new Date().toISOString(),\n    },\n  },\n];"
+      },
+      "id": "fe60fa21-e8ef-545b-9d43-63b1b16b5080",
+      "name": "Config & Profile",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "job_hunt_jobs",
+        "columns": {
+          "column": [
+            {
+              "name": "jobKey"
+            },
+            {
+              "name": "status"
+            },
+            {
+              "name": "title"
+            },
+            {
+              "name": "company"
+            },
+            {
+              "name": "location"
+            },
+            {
+              "name": "remote",
+              "type": "boolean"
+            },
+            {
+              "name": "remoteRegions"
+            },
+            {
+              "name": "employmentType"
+            },
+            {
+              "name": "seniority"
+            },
+            {
+              "name": "source"
+            },
+            {
+              "name": "sources"
+            },
+            {
+              "name": "sourceUrl"
+            },
+            {
+              "name": "applicationUrl"
+            },
+            {
+              "name": "postedAt"
+            },
+            {
+              "name": "discoveredAt"
+            },
+            {
+              "name": "salaryRaw"
+            },
+            {
+              "name": "salaryMin",
+              "type": "number"
+            },
+            {
+              "name": "salaryMax",
+              "type": "number"
+            },
+            {
+              "name": "salaryCurrency"
+            },
+            {
+              "name": "salaryPeriod"
+            },
+            {
+              "name": "salaryDisclosed",
+              "type": "boolean"
+            },
+            {
+              "name": "salaryNote"
+            },
+            {
+              "name": "matchScore",
+              "type": "number"
+            },
+            {
+              "name": "matchLevel"
+            },
+            {
+              "name": "recommendation"
+            },
+            {
+              "name": "confidence",
+              "type": "number"
+            },
+            {
+              "name": "scoreBreakdown"
+            },
+            {
+              "name": "why"
+            },
+            {
+              "name": "matchingSkills"
+            },
+            {
+              "name": "missingSkills"
+            },
+            {
+              "name": "experienceGap"
+            },
+            {
+              "name": "experienceRequired"
+            },
+            {
+              "name": "languageRequirement"
+            },
+            {
+              "name": "description"
+            },
+            {
+              "name": "resume"
+            },
+            {
+              "name": "coverLetter"
+            },
+            {
+              "name": "answers"
+            },
+            {
+              "name": "packageGeneratedAt"
+            },
+            {
+              "name": "notes"
+            },
+            {
+              "name": "statusUpdatedAt"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "2d655dfa-b6e1-5d1a-af55-596422f747d8",
+      "name": "Ensure Jobs Table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        448,
+        592
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "job_hunt_runs",
+        "columns": {
+          "column": [
+            {
+              "name": "runAt"
+            },
+            {
+              "name": "kind"
+            },
+            {
+              "name": "source"
+            },
+            {
+              "name": "message"
+            },
+            {
+              "name": "details"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "ccfe87ea-8c6d-59ea-bba9-162da668c310",
+      "name": "Ensure Runs Table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        592
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://www.arbeitnow.com/api/job-board-api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "JobHuntAgent/2.0 (personal, non-commercial; runs once a day)"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "c2d031a4-c8f5-516c-915b-cffbbc63db81",
+      "name": "Fetch Arbeitnow Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        112
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const SOURCE = 'arbeitnow';\n// Maps the raw API response to the minimal per-source shape. The shared\n// \"Normalize & Deduplicate\" node does the heavy lifting (HTML, salary, keys).\n//\n// FAULT ISOLATION: this node never throws. Timeout, HTTP 4xx/5xx, 429, bad JSON,\n// empty response or a parsing bug all become ONE `sourceError` item, so this\n// source contributes zero jobs and every other source keeps going.\nconst errorItem = (message) => ({ json: { _kind: 'sourceError', source: SOURCE, message: String(message).slice(0, 500) } });\nconst errMsg = (r) => {\n  const e = r && r.error;\n  if (!e) return 'Malformed response (expected job list not found)';\n  if (typeof e === 'string') return e;\n  const code = e.httpCode || e.status || e.statusCode || (e.cause && e.cause.status);\n  let msg = String(e.message || e.description || JSON.stringify(e));\n  if (/<!doctype|<html/i.test(msg)) msg = msg.replace(/\\s*-?\\s*\"?<!doctype[\\s\\S]*$|\\s*-?\\s*\"?<html[\\s\\S]*$/i, '').trim() || 'HTML error page';\n  msg = msg.split('\\n')[0].replace(/^\\d{3}\\s*-?\\s*/, '').slice(0, 160) || 'error';\n  const kind = code ? '' : /timeout|ETIMEDOUT|ECONNABORTED/i.test(msg) ? 'timeout: ' : /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|network/i.test(msg) ? 'network error: ' : '';\n  return `${code ? 'HTTP ' + code + ' ' : ''}${kind}${msg}`.trim();\n};\nconst str = (v) => (v === undefined || v === null ? '' : String(v));\nconst out = [];\ntry {\nfor (const item of $input.all()) {\n  const r = item.json;\n  if (r.error || !Array.isArray(r.data)) { out.push(errorItem(errMsg(r))); continue; }\n  for (const j of r.data) {\n    out.push({ json: {\n      _kind: 'job', source: SOURCE,\n      sourceId: str(j.slug),\n      title: str(j.title),\n      company: str(j.company_name),\n      descriptionHtml: str(j.description),\n      location: str(j.location),\n      remote: typeof j.remote === 'boolean' ? j.remote : null,\n      employmentType: Array.isArray(j.job_types) ? j.job_types.join(', ') : '',\n      salaryText: '',\n      salaryStructured: null,\n      // Arbeitnow `url` is sometimes a job page, sometimes a company homepage -> source URL only\n      sourceUrl: str(j.url),\n      applicationUrl: '',\n      postedAt: j.created_at ? new Date(j.created_at * 1000).toISOString() : '',\n      tags: Array.isArray(j.tags) ? j.tags.map(String) : [],\n      remoteRegions: '',\n      categoryTrusted: false,\n    } });\n  }\n}\n} catch (e) {\n  out.length = 0;\n  out.push(errorItem('Parsing error: ' + (e && e.message ? e.message : e)));\n}\nif (out.length === 0) out.push(errorItem('Empty response (0 jobs)'));\nreturn out;\n"
+      },
+      "id": "827454db-a6ec-5bde-9dd6-0501d9cd0961",
+      "name": "Normalize Arbeitnow",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        112
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://remotive.com/api/remote-jobs?category=software-dev",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "JobHuntAgent/2.0 (personal, non-commercial; runs once a day)"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "0c72e01c-45f0-55d8-8524-4f66425e872f",
+      "name": "Fetch Remotive Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        304
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const SOURCE = 'remotive';\n// Maps the raw API response to the minimal per-source shape. The shared\n// \"Normalize & Deduplicate\" node does the heavy lifting (HTML, salary, keys).\n//\n// FAULT ISOLATION: this node never throws. Timeout, HTTP 4xx/5xx, 429, bad JSON,\n// empty response or a parsing bug all become ONE `sourceError` item, so this\n// source contributes zero jobs and every other source keeps going.\nconst errorItem = (message) => ({ json: { _kind: 'sourceError', source: SOURCE, message: String(message).slice(0, 500) } });\nconst errMsg = (r) => {\n  const e = r && r.error;\n  if (!e) return 'Malformed response (expected job list not found)';\n  if (typeof e === 'string') return e;\n  const code = e.httpCode || e.status || e.statusCode || (e.cause && e.cause.status);\n  let msg = String(e.message || e.description || JSON.stringify(e));\n  if (/<!doctype|<html/i.test(msg)) msg = msg.replace(/\\s*-?\\s*\"?<!doctype[\\s\\S]*$|\\s*-?\\s*\"?<html[\\s\\S]*$/i, '').trim() || 'HTML error page';\n  msg = msg.split('\\n')[0].replace(/^\\d{3}\\s*-?\\s*/, '').slice(0, 160) || 'error';\n  const kind = code ? '' : /timeout|ETIMEDOUT|ECONNABORTED/i.test(msg) ? 'timeout: ' : /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|network/i.test(msg) ? 'network error: ' : '';\n  return `${code ? 'HTTP ' + code + ' ' : ''}${kind}${msg}`.trim();\n};\nconst str = (v) => (v === undefined || v === null ? '' : String(v));\nconst out = [];\ntry {\nfor (const item of $input.all()) {\n  const r = item.json;\n  if (r.error || !Array.isArray(r.jobs)) { out.push(errorItem(errMsg(r))); continue; }\n  for (const j of r.jobs) {\n    out.push({ json: {\n      _kind: 'job', source: SOURCE,\n      sourceId: str(j.id),\n      title: str(j.title),\n      company: str(j.company_name),\n      descriptionHtml: str(j.description),\n      location: str(j.candidate_required_location) || 'Remote',\n      remote: true, // Remotive only lists remote jobs\n      employmentType: str(j.job_type).replace(/_/g, '-'),\n      salaryText: str(j.salary), // free text provided by the source, may be ''\n      salaryStructured: null,\n      sourceUrl: str(j.url),     // Remotive job page (has the Apply button)\n      applicationUrl: '',\n      postedAt: str(j.publication_date),\n      tags: Array.isArray(j.tags) ? j.tags.map(String) : [],\n      remoteRegions: str(j.candidate_required_location),\n      categoryTrusted: true,     // requested category=software-dev\n    } });\n  }\n}\n} catch (e) {\n  out.length = 0;\n  out.push(errorItem('Parsing error: ' + (e && e.message ? e.message : e)));\n}\nif (out.length === 0) out.push(errorItem('Empty response (0 jobs)'));\nreturn out;\n"
+      },
+      "id": "2d8b87b6-9469-5e45-8f07-1a4cd693b799",
+      "name": "Normalize Remotive",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        304
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://jobicy.com/api/v2/remote-jobs?count=50&industry=dev",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "JobHuntAgent/2.0 (personal, non-commercial; runs once a day)"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "9db7b763-ce1b-5e29-a5f6-3c1801c78b1c",
+      "name": "Fetch Jobicy Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        496
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const SOURCE = 'jobicy';\n// Maps the raw API response to the minimal per-source shape. The shared\n// \"Normalize & Deduplicate\" node does the heavy lifting (HTML, salary, keys).\n//\n// FAULT ISOLATION: this node never throws. Timeout, HTTP 4xx/5xx, 429, bad JSON,\n// empty response or a parsing bug all become ONE `sourceError` item, so this\n// source contributes zero jobs and every other source keeps going.\nconst errorItem = (message) => ({ json: { _kind: 'sourceError', source: SOURCE, message: String(message).slice(0, 500) } });\nconst errMsg = (r) => {\n  const e = r && r.error;\n  if (!e) return 'Malformed response (expected job list not found)';\n  if (typeof e === 'string') return e;\n  const code = e.httpCode || e.status || e.statusCode || (e.cause && e.cause.status);\n  let msg = String(e.message || e.description || JSON.stringify(e));\n  if (/<!doctype|<html/i.test(msg)) msg = msg.replace(/\\s*-?\\s*\"?<!doctype[\\s\\S]*$|\\s*-?\\s*\"?<html[\\s\\S]*$/i, '').trim() || 'HTML error page';\n  msg = msg.split('\\n')[0].replace(/^\\d{3}\\s*-?\\s*/, '').slice(0, 160) || 'error';\n  const kind = code ? '' : /timeout|ETIMEDOUT|ECONNABORTED/i.test(msg) ? 'timeout: ' : /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|network/i.test(msg) ? 'network error: ' : '';\n  return `${code ? 'HTTP ' + code + ' ' : ''}${kind}${msg}`.trim();\n};\nconst str = (v) => (v === undefined || v === null ? '' : String(v));\nconst out = [];\ntry {\nfor (const item of $input.all()) {\n  const r = item.json;\n  if (r.error || !Array.isArray(r.jobs)) { out.push(errorItem(errMsg(r))); continue; }\n  for (const j of r.jobs) {\n    const hasSalary = j.salaryMin != null || j.salaryMax != null;\n    out.push({ json: {\n      _kind: 'job', source: SOURCE,\n      sourceId: str(j.id),\n      title: str(j.jobTitle),\n      company: str(j.companyName),\n      descriptionHtml: str(j.jobDescription || j.jobExcerpt),\n      location: str(j.jobGeo) || 'Remote',\n      remote: true, // Jobicy only lists remote jobs\n      employmentType: Array.isArray(j.jobType) ? j.jobType.join(', ') : str(j.jobType),\n      salaryText: '',\n      salaryStructured: hasSalary ? {\n        min: j.salaryMin != null ? Number(j.salaryMin) : null,\n        max: j.salaryMax != null ? Number(j.salaryMax) : null,\n        currency: str(j.salaryCurrency),\n        period: str(j.salaryPeriod),\n      } : null,\n      sourceUrl: str(j.url),\n      applicationUrl: '',\n      postedAt: str(j.pubDate),\n      tags: [].concat(j.jobIndustry || [], j.jobLevel ? ['level: ' + j.jobLevel] : []).map(String),\n      remoteRegions: str(j.jobGeo),\n      categoryTrusted: true, // requested industry=dev\n    } });\n  }\n}\n} catch (e) {\n  out.length = 0;\n  out.push(errorItem('Parsing error: ' + (e && e.message ? e.message : e)));\n}\nif (out.length === 0) out.push(errorItem('Empty response (0 jobs)'));\nreturn out;\n"
+      },
+      "id": "d69072e8-b3cd-5a61-b05c-0329fc87efa1",
+      "name": "Normalize Jobicy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        496
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://www.themuse.com/api/public/jobs?category=Software%20Engineering&level=Internship&level=Entry%20Level&location=Flexible%20%2F%20Remote&page=0",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "JobHuntAgent/2.0 (personal, non-commercial; runs once a day)"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "3b6a4ef1-0316-519d-9064-0511e8005e2b",
+      "name": "Fetch The Muse Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        688
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const SOURCE = 'muse';\n// Maps the raw API response to the minimal per-source shape. The shared\n// \"Normalize & Deduplicate\" node does the heavy lifting (HTML, salary, keys).\n//\n// FAULT ISOLATION: this node never throws. Timeout, HTTP 4xx/5xx, 429, bad JSON,\n// empty response or a parsing bug all become ONE `sourceError` item, so this\n// source contributes zero jobs and every other source keeps going.\nconst errorItem = (message) => ({ json: { _kind: 'sourceError', source: SOURCE, message: String(message).slice(0, 500) } });\nconst errMsg = (r) => {\n  const e = r && r.error;\n  if (!e) return 'Malformed response (expected job list not found)';\n  if (typeof e === 'string') return e;\n  const code = e.httpCode || e.status || e.statusCode || (e.cause && e.cause.status);\n  let msg = String(e.message || e.description || JSON.stringify(e));\n  if (/<!doctype|<html/i.test(msg)) msg = msg.replace(/\\s*-?\\s*\"?<!doctype[\\s\\S]*$|\\s*-?\\s*\"?<html[\\s\\S]*$/i, '').trim() || 'HTML error page';\n  msg = msg.split('\\n')[0].replace(/^\\d{3}\\s*-?\\s*/, '').slice(0, 160) || 'error';\n  const kind = code ? '' : /timeout|ETIMEDOUT|ECONNABORTED/i.test(msg) ? 'timeout: ' : /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|network/i.test(msg) ? 'network error: ' : '';\n  return `${code ? 'HTTP ' + code + ' ' : ''}${kind}${msg}`.trim();\n};\nconst str = (v) => (v === undefined || v === null ? '' : String(v));\nconst out = [];\ntry {\nfor (const item of $input.all()) {\n  const r = item.json;\n  if (r.error || !Array.isArray(r.results)) { out.push(errorItem(errMsg(r))); continue; }\n  for (const j of r.results) {\n    const locs = Array.isArray(j.locations) ? j.locations.map((l) => str(l.name)).filter(Boolean) : [];\n    const isRemote = locs.some((l) => /remote|flexible/i.test(l));\n    out.push({ json: {\n      _kind: 'job', source: SOURCE,\n      sourceId: str(j.id),\n      title: str(j.name),\n      company: str(j.company && j.company.name),\n      descriptionHtml: str(j.contents),\n      location: locs.join('; '),\n      remote: isRemote,\n      employmentType: Array.isArray(j.levels) ? j.levels.map((l) => l.name).join(', ') : '',\n      salaryText: '',\n      salaryStructured: null,\n      sourceUrl: str(j.refs && j.refs.landing_page),\n      applicationUrl: '',\n      postedAt: str(j.publication_date),\n      tags: [].concat(j.categories || [], j.levels || []).map((c) => str(c.name)),\n      // Muse \"Flexible / Remote\" does not say which countries; other listed cities hint at the region\n      remoteRegions: '',\n      categoryTrusted: true, // requested category=Software Engineering\n    } });\n  }\n}\n} catch (e) {\n  out.length = 0;\n  out.push(errorItem('Parsing error: ' + (e && e.message ? e.message : e)));\n}\nif (out.length === 0) out.push(errorItem('Empty response (0 jobs)'));\nreturn out;\n"
+      },
+      "id": "4ae9cc0e-9e4b-5550-8acb-f10288de0031",
+      "name": "Normalize The Muse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        688
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "numberInputs": 6
+      },
+      "id": "2e380f91-3e8f-5a9f-9a84-e2080e6d1393",
+      "name": "Merge Job Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1568,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Source health for this run. Output = rows for the `job_hunt_runs` table:\n// one row per FAILED source + one `run_summary` row whose message is the\n// human-readable report (also sent to Discord every run, even with 0 matches).\n//\n// SOURCE REGISTRY — every known source and its state:\n//   active          -> has Fetch + Normalize nodes wired into \"Merge Job Sources\"\n//   not_configured  -> a legitimate public API exists, but it isn't set up yet\n//   not_available   -> no permitted API/feed for this setup. Never scrape these.\n// Statuses reported: SUCCESS / FAILED (active sources only), NOT CONFIGURED, NOT AVAILABLE.\n// When you wire a new source, set its state to 'active'. A source that sends jobs\n// but is missing here is treated as active automatically.\nconst SOURCE_REGISTRY = [\n  { key: 'arbeitnow', label: 'Arbeitnow', state: 'active' },\n  { key: 'remotive', label: 'Remotive', state: 'active' },\n  { key: 'jobicy', label: 'Jobicy', state: 'active' },\n  { key: 'muse', label: 'The Muse', state: 'active' },\n  { key: 'greenhouse', label: 'Greenhouse', state: 'active' }, // company boards: config.atsBoards.greenhouse\n  { key: 'lever', label: 'Lever', state: 'active' },           // company boards: config.atsBoards.lever\n  { key: 'ashby', label: 'Ashby', state: 'not_configured', note: 'public job-board API, needs company list' },\n  { key: 'linkedin', label: 'LinkedIn', state: 'not_available', note: 'no permitted API for this setup' },\n  { key: 'naukri', label: 'Naukri', state: 'not_available', note: 'no public API' },\n  { key: 'internshala', label: 'Internshala', state: 'not_available', note: 'no public API' },\n  { key: 'indeed', label: 'Indeed', state: 'not_available', note: 'no public job-search API' },\n  { key: 'glassdoor', label: 'Glassdoor', state: 'not_available', note: 'no public API' },\n  { key: 'unstop', label: 'Unstop', state: 'not_available', note: 'no public API' },\n  { key: 'cutshort', label: 'Cutshort', state: 'not_available', note: 'no public API' },\n  { key: 'wellfound', label: 'Wellfound', state: 'not_available', note: 'no public API' },\n  { key: 'instahyre', label: 'Instahyre', state: 'not_available', note: 'no public API' },\n];\n\nconst runAt = $('Config & Profile').first().json.runStartedAt;\nconst all = $input.all().map((i) => i.json);\nconst jobs = all.filter((j) => j._kind === 'job');\nconst errors = all.filter((j) => j._kind === 'sourceError');\n// Anything a Code node emitted after crashing (error item without _kind) counts as a failure too\nconst unknown = all.filter((j) => !j._kind);\nconst counts = jobs.reduce((acc, j) => ((acc[j.source] = (acc[j.source] || 0) + 1), acc), {});\n// ATS sources can fail per company board; collect every error per source\nconst errBySource = errors.reduce((acc, e) => ((acc[e.source] = acc[e.source] || []).push(e.message), acc), {});\nconst notConfiguredNow = new Set(all.filter((j) => j._kind === 'sourceNotConfigured').map((j) => j.source));\n\nconst registry = [...SOURCE_REGISTRY];\nfor (const key of new Set([...Object.keys(counts), ...Object.keys(errBySource)])) {\n  const known = registry.find((s) => s.key === key);\n  if (!known) registry.push({ key, label: key, state: 'active' });\n  else if (known.state !== 'active') known.state = 'active'; // wired up but registry not updated yet\n}\n\nconst results = registry.map((s) => {\n  if (s.state === 'not_configured' || notConfiguredNow.has(s.key)) return { ...s, status: 'NOT CONFIGURED', detail: s.note || 'no boards configured' };\n  if (s.state === 'not_available') return { ...s, status: 'NOT AVAILABLE', detail: s.note || '' };\n  const errs = errBySource[s.key] || [];\n  // Partial success: some company boards worked -> SUCCESS, failed boards listed\n  if (counts[s.key]) return { ...s, status: 'SUCCESS', detail: `${counts[s.key]} jobs${errs.length ? ` · ${errs.length} board(s) failed: ${errs.join('; ')}` : ''}`, errs };\n  if (errs.length) return { ...s, status: 'FAILED', detail: errs.join('; '), errs };\n  return { ...s, status: 'FAILED', detail: 'no output' };\n});\n\nconst ICON = { SUCCESS: '✅', FAILED: '❌', 'NOT CONFIGURED': '⚙️', 'NOT AVAILABLE': '—' };\nconst line = (r) => `${r.label.padEnd(12)}${ICON[r.status]} ${r.status.padEnd(14)} ${String(r.detail).slice(0, 160)}`.trimEnd();\nconst active = results.filter((r) => r.status === 'SUCCESS' || r.status === 'FAILED');\nconst ok = active.filter((r) => r.status === 'SUCCESS').length;\nconst lines = [\n  ...active.map(line),\n  ...results.filter((r) => r.status === 'NOT CONFIGURED').map(line),\n  ...results.filter((r) => r.status === 'NOT AVAILABLE').map(line),\n];\nif (unknown.length) lines.push(`(${unknown.length} unexpected error item(s) — see execution log)`);\nconst report = [\n  'Sources:',\n  ...lines,\n  '',\n  `Jobs collected: ${jobs.length}`,\n  `Sources succeeded: ${ok}/${active.length} active`,\n].join('\\n');\n\n// One row per failure (per board for ATS sources), including failed boards of a partially successful source\nconst rows = active.flatMap((r) => (r.errs && r.errs.length ? r.errs : r.status === 'FAILED' ? [r.detail] : [])\n  .map((m) => ({ json: { runAt, kind: 'source_error', source: r.key, message: m, details: '' } })));\nrows.push({ json: {\n  runAt, kind: 'run_summary', source: 'all', message: report,\n  details: JSON.stringify({\n    jobsPerSource: counts,\n    sourcesOk: ok,\n    sourcesActive: active.length,\n    statuses: Object.fromEntries(results.map((r) => [r.key, r.status])),\n  }),\n} });\nreturn rows;\n"
+      },
+      "id": "4c7c109d-d406-5988-a0ba-4f7ea40614bf",
+      "name": "Source Health Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "job_hunt_runs"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "2a268615-349f-5343-90b5-f62e45e5ff4b",
+      "name": "Log Run Health",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2016,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sends the source-health report every run. Returns nothing (-> no HTTP call)\n// when no Discord webhook is configured; the report is still in job_hunt_runs.\nconst { config } = $('Config & Profile').first().json;\nif (!config.discord?.healthWebhookUrl) return [];\nconst summary = $('Source Health Report').all().map((i) => i.json).find((r) => r.kind === 'run_summary');\nreturn [{ json: { payload: {\n  username: 'Job Hunt Agent',\n  content: ('**Job Hunt Agent v2 — run ' + summary.runAt.slice(0, 16).replace('T', ' ') + ' UTC**\\n```\\n' + summary.message + '\\n```').slice(0, 1990),\n} } }];\n"
+      },
+      "id": "73348574-d1df-5094-9a45-ce613ee35b84",
+      "name": "Prepare Health Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config & Profile').first().json.config.discord.healthWebhookUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1500
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "16f7d5f1-5700-5c2e-af3d-e651a80fe402",
+      "name": "Send Health to Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2464,
+        496
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------- salary helpers (deterministic, never estimates) ----------\nconst NOT_DISCLOSED = () => ({ raw: 'Not disclosed', min: null, max: null, currency: '', period: '', disclosed: false, origin: '' });\n\nconst CUR_RE = '(?:₹|\\\\brs\\\\.?|\\\\binr\\\\b|us\\\\$|\\\\$|\\\\busd\\\\b|€|\\\\beur\\\\b|£|\\\\bgbp\\\\b|\\\\bcad\\\\b|\\\\baud\\\\b|\\\\bchf\\\\b|\\\\bsgd\\\\b)';\nconst NUM_RE = '\\\\d[\\\\d,.]*\\\\s?(?:k|m|lpa|lakhs?|lacs?|l|cr|crores?)?\\\\b';\nconst PERIOD_RE = '(?:\\\\s?(?:\\\\/|per|a|an|p\\\\.?)\\\\s?(?:month|mo|year|yr|annum|a|hour|hr|h|week|wk|day))';\nconst MONEY_RE = new RegExp(\n  `(?:${CUR_RE}\\\\s?${NUM_RE}|${NUM_RE}\\\\s?${CUR_RE}|\\\\d[\\\\d,.]*\\\\s?(?:lpa|lakhs?\\\\s*(?:per annum|p\\\\.?a\\\\.?)?))` +\n  `(?:\\\\s?(?:-|–|—|to)\\\\s?(?:${CUR_RE}\\\\s?)?${NUM_RE}(?:\\\\s?${CUR_RE})?)?${PERIOD_RE}?`, 'gi');\nconst PAY_CONTEXT = /(salary|stipend|compensation|\\bpay\\b|\\bpaid\\b|\\bctc\\b|\\blpa\\b|base (salary|pay)|\\bote\\b|gehalt|vergütung|remuneration|\\bwage|pay range|pay rate|hourly rate)/i;\nconst NOT_PAY_CONTEXT = /(funding|raised|revenue|valuation|series [a-e]|invest|customers|users|budget|allowance|reimburs|learning|education|equipment|wellness|home office|bonus|referral|401k|donat|grant|prize)/i;\n\nfunction currencyOf(s) {\n  const t = s.toLowerCase();\n  if (/₹|\\brs\\.?|\\binr\\b|lpa|lakh|lac|crore/.test(t)) return 'INR';\n  if (/€|\\beur\\b/.test(t)) return 'EUR';\n  if (/£|\\bgbp\\b/.test(t)) return 'GBP';\n  if (/\\bcad\\b/.test(t)) return 'CAD';\n  if (/\\baud\\b/.test(t)) return 'AUD';\n  if (/\\bchf\\b/.test(t)) return 'CHF';\n  if (/\\bsgd\\b/.test(t)) return 'SGD';\n  if (/\\$|\\busd\\b/.test(t)) return 'USD';\n  return '';\n}\nfunction periodOf(s) {\n  const t = s.toLowerCase();\n  if (/lpa|lakhs?\\s*(per annum|p\\.?a)|per annum|\\/\\s?(year|yr|annum)|per year|a year|annual|yearly|p\\.?a\\.?\\b/.test(t)) return 'year';\n  if (/\\/\\s?(month|mo)\\b|per month|a month|monthly|p\\.?m\\.?\\b/.test(t)) return 'month';\n  if (/\\/\\s?(hour|hr|h)\\b|per hour|an hour|hourly/.test(t)) return 'hour';\n  if (/\\/\\s?(week|wk)\\b|per week|weekly/.test(t)) return 'week';\n  if (/\\/\\s?day\\b|per day|daily/.test(t)) return 'day';\n  return '';\n}\nfunction numbersOf(s) {\n  const nums = [];\n  const re = /(\\d[\\d,.]*)\\s?(k|m|lpa|lakhs?|lacs?|l|cr|crores?)?\\b/gi;\n  let m;\n  while ((m = re.exec(s))) {\n    let n = m[1].replace(/[.,]$/, '');\n    if (/^\\d{1,3}(,\\d{3})+(\\.\\d+)?$/.test(n)) n = n.replace(/,/g, '');            // 1,000,000\n    else if (/^\\d{1,3}(\\.\\d{3})+$/.test(n)) n = n.replace(/\\./g, '');             // 1.000.000 (EU)\n    else n = n.replace(',', '.');                                                // 35,3k -> 35.3\n    let v = parseFloat(n);\n    if (!isFinite(v)) continue;\n    const u = (m[2] || '').toLowerCase();\n    if (u === 'k') v *= 1e3;\n    else if (u === 'm') v *= 1e6;\n    else if (/^(lpa|lakh|lakhs|lac|lacs|l)$/.test(u)) v *= 1e5;\n    else if (/^(cr|crore|crores)$/.test(u)) v *= 1e7;\n    nums.push(Math.round(v));\n  }\n  return nums;\n}\nfunction parseSalaryText(raw, origin) {\n  const text = String(raw || '').trim();\n  if (!text) return NOT_DISCLOSED();\n  if (/\\bunpaid\\b|\\bno stipend\\b|\\bvolunteer\\b/i.test(text)) return { raw: text, min: 0, max: 0, currency: '', period: '', disclosed: true, origin };\n  if (/performance[- ]based|commission only/i.test(text) && !/\\d/.test(text)) return { raw: text, min: null, max: null, currency: '', period: '', disclosed: true, origin };\n  const nums = numbersOf(text).filter((n) => n > 0);\n  if (!nums.length) return NOT_DISCLOSED();\n  return {\n    raw: text.slice(0, 200),\n    min: Math.min(...nums.slice(0, 2)),\n    max: Math.max(...nums.slice(0, 2)),\n    currency: currencyOf(text),\n    period: periodOf(text),\n    disclosed: true,\n    origin,\n  };\n}\n// Find a pay statement in free text. Requires pay context nearby so that\n// \"$50M funding\" or \"10,000 customers\" are not mistaken for salary.\nfunction findSalaryInText(text) {\n  const t = String(text || '');\n  if (/\\bunpaid (internship|position|role)\\b/i.test(t)) return parseSalaryText('Unpaid', 'description');\n  MONEY_RE.lastIndex = 0;\n  let m;\n  while ((m = MONEY_RE.exec(t))) {\n    const around = t.slice(Math.max(0, m.index - 80), m.index + m[0].length + 40);\n    if (!PAY_CONTEXT.test(around)) continue;\n    if (NOT_PAY_CONTEXT.test(around)) continue;\n    if (/\\d\\s?m\\b/i.test(m[0])) continue; // $11M etc. is never a salary\n    const parsed = parseSalaryText(m[0], 'description');\n    if (parsed.disclosed && (parsed.currency || parsed.period)) return parsed;\n  }\n  const perf = t.match(/[^.\\n]{0,60}performance[- ]based (stipend|pay|compensation)[^.\\n]{0,40}/i);\n  if (perf) return { raw: perf[0].trim(), min: null, max: null, currency: '', period: '', disclosed: true, origin: 'description' };\n  return NOT_DISCLOSED();\n}\n\n\n// ---------- text helpers ----------\nconst decode = (s) => String(s ?? '')\n  .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n  .replace(/&quot;/g, '\"').replace(/&#0?39;|&apos;|&rsquo;|&lsquo;/g, \"'\").replace(/&[lr]dquo;/g, '\"')\n  .replace(/&ndash;|&mdash;/g, '-').replace(/&#(\\d+);/g, (m, d) => String.fromCharCode(+d));\nconst htmlToText = (html) => decode(String(html || '')\n  .replace(/<(script|style)[\\s\\S]*?<\\/\\1>/gi, ' ')\n  .replace(/<br\\s*\\/?>/gi, '\\n')\n  .replace(/<\\/(p|div|li|h[1-6]|tr|ul|ol)>/gi, '\\n')\n  .replace(/<li[^>]*>/gi, '• ')\n  .replace(/<[^>]+>/g, ' '))\n  .replace(/[ \\t\\f\\r\\v]+/g, ' ').replace(/ *\\n */g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();\n\n// ---------- application URL: only when the posting itself links to an ATS / apply page ----------\nconst SOURCE_DOMAINS = /(arbeitnow\\.com|remotive\\.com|jobicy\\.com|themuse\\.com)/i;\nconst APPLY_URL = /(greenhouse\\.io|lever\\.co|ashbyhq\\.com|workable\\.com|smartrecruiters\\.com|myworkdayjobs\\.com|personio\\.(de|com)|recruitee\\.com|bamboohr\\.com|breezy\\.hr|jobvite\\.com|teamtailor\\.com|join\\.com|wellfound\\.com\\/jobs|\\/apply\\b|\\/careers?\\/.+|\\/jobs?\\/.+)/i;\nfunction extractApplicationUrl(html) {\n  const links = [...String(html || '').matchAll(/<a\\s[^>]*href=[\"']([^\"']+)[\"'][^>]*>([\\s\\S]*?)<\\/a>/gi)]\n    .map((m) => ({ url: decode(m[1]).trim(), text: htmlToText(m[2]).toLowerCase() }))\n    .filter((l) => /^https?:\\/\\//i.test(l.url) && !SOURCE_DOMAINS.test(l.url));\n  const byText = links.find((l) => /apply|bewerb/.test(l.text));\n  if (byText) return byText.url;\n  const byUrl = links.find((l) => APPLY_URL.test(l.url));\n  return byUrl ? byUrl.url : '';\n}\nfunction canonicalUrl(u) {\n  try {\n    const x = new URL(u);\n    [...x.searchParams.keys()].forEach((k) => { if (/^(utm_|ref|source|gh_src|lever-source)/i.test(k)) x.searchParams.delete(k); });\n    return (x.hostname.replace(/^www\\./, '') + x.pathname.replace(/\\/+$/, '') + (x.search || '')).toLowerCase();\n  } catch { return ''; }\n}\n\n// ---------- dedupe keys ----------\nconst normCompany = (s) => decode(s).toLowerCase()\n  .replace(/\\b(gmbh|inc|ltd|llc|pvt|private|limited|ag|se|co|corp|corporation|plc|bv|sas|sa|the)\\b\\.?/g, ' ')\n  .replace(/[^a-z0-9]+/g, ' ').trim();\nconst normTitle = (s) => decode(s).toLowerCase()\n  .replace(/\\((?:[mwfdxh]\\s*\\/\\s*)+[mwfdxh]\\)|\\(all genders?\\)|\\(gn\\)/g, ' ')\n  .replace(/[-–|(]\\s*(100%\\s*)?remote\\b.*$/, ' ')\n  .replace(/[^a-z0-9+#.]+/g, ' ').replace(/\\s+/g, ' ').trim();\nconst normLoc = (job) => (job.remote ? 'remote' : decode(job.location).toLowerCase().split(/[;,/]/)[0].replace(/[^a-z ]/g, '').trim());\n\n// ---------- heuristics used by the filter & for the AI ----------\nfunction seniorityOf(title) {\n  const t = title.toLowerCase();\n  if (/\\b(intern|internship|trainee|werkstudent|working student|praktikum|praktikant|apprentice|co-op)\\b/.test(t)) return 'internship';\n  if (/\\b(junior|jr\\.?|graduate|grad|entry[- ]level|fresher|associate)\\b/.test(t)) return 'junior';\n  if (/\\b(senior|sr\\.?|lead|principal|staff|head|director|manager|architect|vp|chief|expert)\\b/.test(t)) return 'senior';\n  return 'unknown';\n}\nfunction minYearsRequired(text) {\n  let min = null;\n  const re = /(\\d{1,2})\\s*\\+?\\s*(?:(?:-|–|to)\\s*\\d{1,2}\\s*)?(?:years?|yrs?|jahre)\\b[^.\\n]{0,40}?(?:experience|exp\\b|erfahrung|professional|industry|in\\b)/gi;\n  let m;\n  while ((m = re.exec(text))) { const n = +m[1]; if (n > 0 && n < 20) min = min === null ? n : Math.min(min, n); }\n  return min;\n}\n\n// ---------- main ----------\nconst nowIso = new Date().toISOString();\nconst SOURCE_PRIORITY = ['greenhouse', 'lever', 'remotive', 'jobicy', 'muse', 'arbeitnow']; // direct company postings first when merging\nconst rank = (s) => (SOURCE_PRIORITY.includes(s) ? SOURCE_PRIORITY.indexOf(s) : SOURCE_PRIORITY.length); // unknown/new sources last\nconst all = $input.all().map((i) => i.json);\nconst jobs = all.filter((j) => j._kind === 'job')\n  .sort((a, b) => rank(a.source) - rank(b.source));\nconst sourceErrors = all.filter((j) => j._kind === 'sourceError');\n\nconst byKey = new Map();\nconst keyBySourceId = new Map();\nconst keyByAppUrl = new Map();\nlet duplicates = 0;\n\nfor (const r of jobs) {\n  const title = decode(r.title).trim();\n  const company = decode(r.company).trim();\n  if (!title) continue;\n  const description = htmlToText(r.descriptionHtml).slice(0, 12000);\n\n  let salary = NOT_DISCLOSED();\n  if (r.salaryStructured && (r.salaryStructured.min != null || r.salaryStructured.max != null)) {\n    const s = r.salaryStructured;\n    const lo = s.min ?? s.max, hi = s.max ?? s.min;\n    salary = {\n      raw: `${s.currency || ''} ${lo}${hi !== lo ? ' - ' + hi : ''}${s.period ? ' / ' + s.period : ''}`.trim(),\n      min: lo, max: hi, currency: s.currency || '', period: String(s.period || '').replace(/ly$/, '').replace(/^annual$/, 'year'),\n      disclosed: true, origin: 'source-field',\n    };\n  } else if (r.salaryText && r.salaryText.trim()) {\n    salary = parseSalaryText(decode(r.salaryText), 'source-field');\n  }\n  if (!salary.disclosed) salary = findSalaryInText(description);\n\n  const applicationUrl = r.applicationUrl || extractApplicationUrl(r.descriptionHtml);\n  const job = {\n    jobKey: '',\n    title,\n    company,\n    description,\n    location: decode(r.location).trim(),\n    remote: r.remote,\n    remoteRegions: decode(r.remoteRegions).trim(),\n    employmentType: r.employmentType || '',\n    salary,\n    source: r.source,\n    sources: [{ source: r.source, sourceId: r.sourceId, sourceUrl: r.sourceUrl }],\n    sourceId: r.sourceId,\n    sourceUrl: r.sourceUrl,\n    applicationUrl,\n    applicationUrlOrigin: r.applicationUrl ? 'source' : (applicationUrl ? 'link found in description' : ''),\n    postedAt: r.postedAt || '',\n    updatedAt: r.updatedAt || '',\n    discoveredAt: nowIso,\n    tags: Array.isArray(r.tags) ? r.tags : [],\n    categoryTrusted: !!r.categoryTrusted,\n    seniority: seniorityOf(title),\n    minYearsRequired: minYearsRequired(description),\n  };\n  job.jobKey = `${normCompany(company) || 'unknown'}|${normTitle(title)}|${normLoc(job) || 'unknown'}`.slice(0, 250);\n\n  // Match existing logical job by: same source id -> same application URL -> company+title+location\n  const sid = `${job.source}:${job.sourceId}`;\n  const appKey = applicationUrl ? canonicalUrl(applicationUrl) : '';\n  const existingKey = keyBySourceId.get(sid) || (appKey && keyByAppUrl.get(appKey)) || (byKey.has(job.jobKey) ? job.jobKey : null);\n\n  if (existingKey) {\n    duplicates++;\n    const e = byKey.get(existingKey);\n    if (!e.sources.some((s) => s.source === job.source)) e.sources.push(job.sources[0]); // one entry per source\n    if (!e.salary.disclosed && job.salary.disclosed) e.salary = job.salary;\n    if (!e.applicationUrl && job.applicationUrl) { e.applicationUrl = job.applicationUrl; e.applicationUrlOrigin = job.applicationUrlOrigin; }\n    if (job.description.length > e.description.length) e.description = job.description;\n    e.tags = [...new Set([...e.tags, ...job.tags])];\n    keyBySourceId.set(sid, existingKey);\n    continue;\n  }\n  byKey.set(job.jobKey, job);\n  keyBySourceId.set(sid, job.jobKey);\n  if (appKey) keyByAppUrl.set(appKey, job.jobKey);\n}\n\nconst stats = {\n  collected: jobs.length,\n  unique: byKey.size,\n  duplicatesMerged: duplicates,\n  failedSources: sourceErrors.map((e) => e.source),\n  perSource: jobs.reduce((acc, j) => ((acc[j.source] = (acc[j.source] || 0) + 1), acc), {}),\n};\nreturn [...byKey.values()].map((job) => ({ json: { ...job, pipelineStats: stats } }));\n"
+      },
+      "id": "27025558-408b-50d5-9398-dcaf2839ea35",
+      "name": "Normalize & Deduplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        688
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Stage 1: cheap deterministic filter. Only drops OBVIOUS mismatches;\n// anything borderline goes to Qwen. Each kept job gets a prefilterScore used\n// to pick which jobs get AI time when there are more than maxAiJobsPerRun.\nconst { config, skillList } = $('Config & Profile').first().json;\nconst policy = config.locationPolicy;\n\nconst POSITIVE = [\n  /\\bsoftware\\b/, /\\b(developer|entwickler|programmer|sde|swe)\\b/, /\\bsoftwareentwickler/,\n  /\\b(front|back)[\\s-]?end\\b/, /\\bfull[\\s-]?stack\\b/, /\\bweb\\b/,\n  /\\b(javascript|typescript|react|node(\\.?js)?|next\\.?js|vue|angular|python|java|golang|ruby|php|\\.net|rust|kotlin|swift)\\b/,\n  /\\b(devops|sre|site reliability|platform engineer|cloud engineer|infrastructure engineer|data engineer|ml engineer|ai engineer|machine learning engineer|qa engineer|test automation|automation engineer|api)\\b/,\n  /\\b(engineering|software|developer|sde|tech|it) (intern|internship|trainee)\\b/, /\\bintern(ship)?\\b.*\\b(engineer|developer|software)\\b/,\n];\nconst NEGATIVE = /\\b(sales|account executive|account manager|marketing|recruit(er|ing)|talent|hr|human resources|accountant|accounting|finance|nurse|driver|customer (service|success|support)|kundenservice|support agent|call center|writer|copywriter|content (reviewer|moderator|creator)|translator|evaluator|rater|annotator|data entry|teacher|tutor|lawyer|legal|paralegal|office assistant|receptionist|mechanic|electrician|mechanical|electrical|civil|chemical|warehouse|logistics|business development|product manager|project manager|scrum master|graphic designer|consultant|sap|medical|clinical|oncology|pharma\\w*|linguist\\w*)\\b/;\nconst SENIOR = /\\b(senior|sr\\.?|lead|principal|staff|head of|director|manager|architect|vp|chief|expert)\\b|\\b(engineer|developer|sde|swe)\\s*(iii|iv|3|4)\\b/;\n\n// Working Student / Werkstudent roles usually require enrollment at a university in the\n// hiring country (typically Germany). They are NOT dropped here: they are flagged and the AI\n// must check eligibility; Parse & Validate only shortlists them if openness is confirmed.\nconst WORKING_STUDENT = /\\b(working[\\s-]?students?|werkstudent(in|en|innen)?|werkstudierende[rn]?|studentische[rn]? (hilfskraft|mitarbeiter\\w*))\\b/i;\nconst lc = (s) => String(s || '').toLowerCase();\nconst matchesAny = (text, list) => list.some((w) => text.includes(w));\n\nconst kept = [];\nconst dropped = {};\nconst drop = (reason) => { dropped[reason] = (dropped[reason] || 0) + 1; };\n\nfor (const item of $input.all()) {\n  const j = item.json;\n  const title = lc(j.title);\n  const tagText = lc((j.tags || []).join(' '));\n\n  if (NEGATIVE.test(title)) { drop('non-software title'); continue; }\n  if (SENIOR.test(title) && j.seniority !== 'internship' && j.seniority !== 'junior') { drop('senior title'); continue; }\n  // Sources queried with a software category are trusted unless the title is clearly non-software\n  const relevant = POSITIVE.some((re) => re.test(title)) || POSITIVE.some((re) => re.test(tagText));\n  if (!relevant && !j.categoryTrusted) { drop('no software keyword'); continue; }\n  if (j.minYearsRequired !== null && j.minYearsRequired > config.maxYearsExperience) { drop(`requires ${config.maxYearsExperience + 1}+ years`); continue; }\n\n  // Location policy\n  let locationOk;\n  if (j.remote === true) {\n    const regions = lc(j.remoteRegions);\n    locationOk = policy.acceptRemote && (!regions || matchesAny(regions, policy.acceptedRemoteRegions));\n    if (!locationOk) { drop('remote but region-restricted'); continue; }\n  } else {\n    locationOk = matchesAny(lc(j.location), policy.acceptedLocations);\n    if (!locationOk) { drop('on-site outside accepted locations'); continue; }\n  }\n\n  // Cheap relevance score (only for ordering, never shown as the match score)\n  const hay = lc(`${j.title} ${j.tags.join(' ')} ${j.description}`);\n  const skillHits = skillList.filter((s) => hay.includes(s.toLowerCase().replace(/\\s+apis?$/, ''))).length;\n  const wsMatch = String(j.title).match(WORKING_STUDENT) || String(j.description).slice(0, 1500).match(WORKING_STUDENT);\n  const studentEligibilityReview = !!wsMatch;\n  // Flagged roles don't get the internship bonus, so they don't crowd out ordinary internships\n  const levelBonus = studentEligibilityReview ? 6 : ({ internship: 25, junior: 18, unknown: 6, senior: 0 }[j.seniority] ?? 0);\n  const prefilterScore = skillHits * 4 + levelBonus + (POSITIVE.some((re) => re.test(title)) ? 10 : 0) + (j.salary.disclosed ? 3 : 0);\n\n  kept.push({ json: {\n    ...j, prefilterScore, prefilterSkillHits: skillHits,\n    studentEligibilityReview,\n    studentEligibilityReason: studentEligibilityReview ? `\"${wsMatch[0]}\" role — usually requires enrollment at a university in the hiring country` : '',\n  } });\n}\n\nconst stats = { ...($input.first()?.json.pipelineStats || {}), afterBasicFilter: kept.length, droppedByReason: dropped };\nreturn kept.map((i) => ({ json: { ...i.json, pipelineStats: stats } }));\n"
+      },
+      "id": "947f4e2d-a60f-5cf3-bae9-47e0906df5c4",
+      "name": "Basic Relevance Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        688
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "rowNotExists",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "job_hunt_jobs"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "jobKey",
+              "keyValue": "={{ $json.jobKey }}"
+            }
+          ]
+        }
+      },
+      "id": "2b3cc569-dfa2-5ded-9d39-1c6a3efde04d",
+      "name": "Skip Already Seen Jobs",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2240,
+        688
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Picks the most promising unseen jobs (bounded by maxAiJobsPerRun) and\n// builds the Ollama /api/chat request. Output is forced to a JSON schema.\nconst { config, profile } = $('Config & Profile').first().json;\n\nconst candidates = $input.all().map((i) => i.json)\n  .sort((a, b) => b.prefilterScore - a.prefilterScore)\n  .slice(0, config.maxAiJobsPerRun);\n\nconst schema = {\n  type: 'object',\n  properties: {\n    isSoftwareRole: { type: 'boolean' },\n    seniority: { type: 'string', enum: ['internship', 'entry', 'junior', 'mid', 'senior', 'unknown'] },\n    experienceRequired: { type: 'string' },\n    requiredSkills: { type: 'array', items: { type: 'string' } },\n    matchingSkills: { type: 'array', items: { type: 'string' } },\n    missingSkills: { type: 'array', items: { type: 'string' } },\n    experienceGap: { type: 'array', items: { type: 'string' } },\n    languageRequirement: { type: 'string' },\n    locationFit: { type: 'string', enum: ['good', 'possible', 'poor', 'unknown'] },\n    remoteFit: { type: 'string', enum: ['remote', 'hybrid', 'onsite', 'unknown'] },\n    skillsScore: { type: 'integer', minimum: 0, maximum: 40 },\n    levelScore: { type: 'integer', minimum: 0, maximum: 25 },\n    locationScore: { type: 'integer', minimum: 0, maximum: 20 },\n    interestScore: { type: 'integer', minimum: 0, maximum: 15 },\n    why: { type: 'array', items: { type: 'string' } },\n    compensationDetail: {\n      type: 'object',\n      properties: {\n        salary: { type: 'string' },\n        stipend: { type: 'string' },\n        bonus: { type: 'string' },\n        signingBonus: { type: 'string' },\n        equity: { type: 'string' },\n        otherCompensation: { type: 'string' },\n      },\n      required: ['salary', 'stipend', 'bonus', 'signingBonus', 'equity', 'otherCompensation'],\n    },\n    evidence: {\n      type: 'object',\n      properties: {\n        experience: { type: 'string' },\n        degree: { type: 'string' },\n        workArrangement: { type: 'string' },\n        availability: { type: 'string' },\n        otherConstraints: { type: 'array', items: { type: 'string' } },\n      },\n      required: ['experience', 'degree', 'workArrangement', 'availability', 'otherConstraints'],\n    },\n    studentEligibility: {\n      type: 'object',\n      properties: {\n        enrollmentRequired: { type: 'string', enum: ['yes', 'no', 'unclear', 'not_applicable'] },\n        enrollmentCountry: { type: 'string' },\n        openToStudentsOutsideCountry: { type: 'string', enum: ['yes', 'no', 'unclear', 'not_applicable'] },\n        locationCompatible: { type: 'string', enum: ['yes', 'no', 'unclear', 'not_applicable'] },\n        evidenceQuote: { type: 'string' },\n      },\n      required: ['enrollmentRequired', 'enrollmentCountry', 'openToStudentsOutsideCountry', 'locationCompatible', 'evidenceQuote'],\n    },\n    recommendation: { type: 'string', enum: ['apply', 'consider', 'skip'] },\n    confidence: { type: 'number', minimum: 0, maximum: 1 },\n  },\n  required: ['isSoftwareRole', 'seniority', 'experienceRequired', 'requiredSkills', 'matchingSkills', 'missingSkills',\n    'experienceGap', 'languageRequirement', 'locationFit', 'remoteFit', 'skillsScore', 'levelScore', 'locationScore',\n    'interestScore', 'why', 'compensationDetail', 'evidence', 'studentEligibility', 'recommendation', 'confidence'],\n};\n\nconst system = `You are a strict, factual job-fit analyst for one candidate. Respond ONLY with JSON matching the schema.\nUse ONLY the job posting and the candidate profile. Never invent facts about the job, the company, or the candidate.\n\nScoring rubric (be conservative):\n- skillsScore 0-40: overlap between technologies the job requires and the candidate's skills. Core stack overlap (e.g. TypeScript/React/Node.js/PostgreSQL) scores high; unrelated stack scores low.\n- levelScore 0-25: 25 = internship / entry level / no experience required; 15 = junior (up to 2 years); 5 = 3 years required; 0 = 4+ years or senior.\n- locationScore 0-20: 20 = remote and open to candidates in ${profile.location}, or located in ${profile.location}; 10 = unclear; 0 = requires living or work authorization outside ${profile.location}.\n- interestScore 0-15: alignment with candidate interests (full-stack, backend, APIs, real-time, AI automation).\n\nField rules:\n- matchingSkills: skills that appear BOTH in the job and in the candidate profile.\n- missingSkills: skills/tools the job asks for that the candidate profile does not list.\n- experienceRequired: ONLY what the posting states about required experience (copy it into evidence.experience). If the posting states no years/level of experience, return \"not stated\". Never derive years from seniority, salary or this rubric.\n- experienceGap: concrete requirements the candidate does not meet (years, degree, domain). Empty if none.\n- languageRequirement: spoken-language requirement stated in the posting (e.g. \"German C1\"), or \"\" if none stated.\n- why: 2-4 short factual bullet reasons for the score.\n- compensationDetail: for each field copy the EXACT fragment from the posting that states it, or \"\" if the posting does not state it. Never estimate, convert or infer amounts.\n  * salary: base salary / pay range. stipend: internship/working-student stipend or pay.\n  * bonus: performance/annual/quarterly bonus. signingBonus: signing/joining/sign-on bonus.\n  * equity: stock, options, RSUs, equity. otherCompensation: other paid compensation (e.g. allowances, budgets).\n- evidence: EXACT fragments copied from the posting (in the posting's own language), or \"\" / [] if the posting does not state it:\n  * experience: text stating required years or level of experience.\n  * degree: text stating a required degree, study programme or university enrollment.\n  * workArrangement: text stating remote / hybrid / on-site / where the work is done.\n  * availability: text stating required hours, duration, schedule or start date.\n  * otherConstraints: up to 3 other eligibility constraints (work authorization, travel, required languages, relocation).\n- studentEligibility: ONLY when the posting has an \"ELIGIBILITY REVIEW\" line (Working Student / Werkstudent role). Otherwise set every field to \"not_applicable\" and evidenceQuote to \"\".\n  For a Working Student role evaluate strictly from the posting:\n  * enrollmentRequired: must the candidate be enrolled at a university in a specific country? (\"yes\" / \"no\" / \"unclear\"). Use \"unclear\" whenever the posting does not explicitly establish it.\n  * enrollmentCountry: that country ONLY if the posting names it, or \"\" if not stated.\n  * openToStudentsOutsideCountry: \"yes\" ONLY if the posting explicitly says students enrolled or living outside that country can apply; \"no\" if it excludes them; otherwise \"unclear\".\n  * locationCompatible: can a student who lives and studies in ${profile.location} do this role from ${profile.location}? \"yes\" only if the posting clearly allows it.\n  * evidenceQuote: copy the EXACT text from the posting that supports openToStudentsOutsideCountry / enrollmentRequired, or \"\" if there is none.\n  Remote work alone does NOT mean the role is open to students in other countries.\n- recommendation: \"apply\" (strong fit), \"consider\" (partial fit), \"skip\" (poor fit or not software).\n- confidence: 0-1, how sure you are given the information available.`;\n\nconst candidate = {\n  status: profile.education.status,\n  location: profile.location,\n  targetRoles: profile.targetRoles,\n  interests: profile.interests,\n  skills: profile.skills,\n  projects: profile.projects.map((p) => ({ name: p.name, summary: p.summary, tech: p.tech })),\n  professionalExperience: profile.experience.length ? profile.experience : 'none listed (student)',\n};\n\nreturn candidates.map((job) => {\n  const posting = [\n    `Title: ${job.title}`,\n    `Company: ${job.company || 'unknown'}`,\n    `Location: ${job.location || 'unknown'}`,\n    `Remote: ${job.remote === null ? 'unknown' : job.remote}${job.remoteRegions ? ' (candidate regions: ' + job.remoteRegions + ')' : ''}`,\n    `Employment type: ${job.employmentType || 'unknown'}`,\n    `Salary field from job board: ${job.salary.origin === 'source-field' ? job.salary.raw : 'none'}`,\n    `Tags: ${(job.tags || []).join(', ') || 'none'}`,\n    ...(job.studentEligibilityReview ? [`ELIGIBILITY REVIEW: ${job.studentEligibilityReason}. The candidate studies and lives in ${profile.location}.`] : []),\n    '',\n    'Description:',\n    job.description.slice(0, 6000),\n  ].join('\\n');\n\n  return {\n    json: {\n      job,\n      ollamaRequest: {\n        model: config.model,\n        stream: false,\n        think: false,\n        format: schema,\n        keep_alive: '15m',\n        options: { temperature: 0, seed: 42, num_ctx: 8192, num_predict: 1400 }, // 1400: room for evidence quotes\n        messages: [\n          { role: 'system', content: system },\n          { role: 'user', content: `CANDIDATE PROFILE:\\n${JSON.stringify(candidate)}\\n\\nJOB POSTING:\\n${posting}` },\n        ],\n      },\n    },\n  };\n});\n"
+      },
+      "id": "e2d1df1f-b375-598f-9918-d214f54104f6",
+      "name": "Prepare AI Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2464,
+        688
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.ollamaRequest.model, messages: $json.ollamaRequest.messages, temperature: $json.ollamaRequest.options.temperature, seed: $json.ollamaRequest.options.seed, max_tokens: $json.ollamaRequest.options.num_predict, response_format: { type: 'json_schema', json_schema: { name: 'job_hunt_output', strict: false, schema: $json.ollamaRequest.format } }, provider: { require_parameters: true }, reasoning: { enabled: false } }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 0
+            }
+          },
+          "timeout": 900000
+        }
+      },
+      "id": "1951285e-9dec-5676-a579-a322b2b69fff",
+      "name": "Analyze Job with Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2688,
+        688
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ---------- salary helpers (deterministic, never estimates) ----------\nconst NOT_DISCLOSED = () => ({ raw: 'Not disclosed', min: null, max: null, currency: '', period: '', disclosed: false, origin: '' });\n\nconst CUR_RE = '(?:₹|\\\\brs\\\\.?|\\\\binr\\\\b|us\\\\$|\\\\$|\\\\busd\\\\b|€|\\\\beur\\\\b|£|\\\\bgbp\\\\b|\\\\bcad\\\\b|\\\\baud\\\\b|\\\\bchf\\\\b|\\\\bsgd\\\\b)';\nconst NUM_RE = '\\\\d[\\\\d,.]*\\\\s?(?:k|m|lpa|lakhs?|lacs?|l|cr|crores?)?\\\\b';\nconst PERIOD_RE = '(?:\\\\s?(?:\\\\/|per|a|an|p\\\\.?)\\\\s?(?:month|mo|year|yr|annum|a|hour|hr|h|week|wk|day))';\nconst MONEY_RE = new RegExp(\n  `(?:${CUR_RE}\\\\s?${NUM_RE}|${NUM_RE}\\\\s?${CUR_RE}|\\\\d[\\\\d,.]*\\\\s?(?:lpa|lakhs?\\\\s*(?:per annum|p\\\\.?a\\\\.?)?))` +\n  `(?:\\\\s?(?:-|–|—|to)\\\\s?(?:${CUR_RE}\\\\s?)?${NUM_RE}(?:\\\\s?${CUR_RE})?)?${PERIOD_RE}?`, 'gi');\nconst PAY_CONTEXT = /(salary|stipend|compensation|\\bpay\\b|\\bpaid\\b|\\bctc\\b|\\blpa\\b|base (salary|pay)|\\bote\\b|gehalt|vergütung|remuneration|\\bwage|pay range|pay rate|hourly rate)/i;\nconst NOT_PAY_CONTEXT = /(funding|raised|revenue|valuation|series [a-e]|invest|customers|users|budget|allowance|reimburs|learning|education|equipment|wellness|home office|bonus|referral|401k|donat|grant|prize)/i;\n\nfunction currencyOf(s) {\n  const t = s.toLowerCase();\n  if (/₹|\\brs\\.?|\\binr\\b|lpa|lakh|lac|crore/.test(t)) return 'INR';\n  if (/€|\\beur\\b/.test(t)) return 'EUR';\n  if (/£|\\bgbp\\b/.test(t)) return 'GBP';\n  if (/\\bcad\\b/.test(t)) return 'CAD';\n  if (/\\baud\\b/.test(t)) return 'AUD';\n  if (/\\bchf\\b/.test(t)) return 'CHF';\n  if (/\\bsgd\\b/.test(t)) return 'SGD';\n  if (/\\$|\\busd\\b/.test(t)) return 'USD';\n  return '';\n}\nfunction periodOf(s) {\n  const t = s.toLowerCase();\n  if (/lpa|lakhs?\\s*(per annum|p\\.?a)|per annum|\\/\\s?(year|yr|annum)|per year|a year|annual|yearly|p\\.?a\\.?\\b/.test(t)) return 'year';\n  if (/\\/\\s?(month|mo)\\b|per month|a month|monthly|p\\.?m\\.?\\b/.test(t)) return 'month';\n  if (/\\/\\s?(hour|hr|h)\\b|per hour|an hour|hourly/.test(t)) return 'hour';\n  if (/\\/\\s?(week|wk)\\b|per week|weekly/.test(t)) return 'week';\n  if (/\\/\\s?day\\b|per day|daily/.test(t)) return 'day';\n  return '';\n}\nfunction numbersOf(s) {\n  const nums = [];\n  const re = /(\\d[\\d,.]*)\\s?(k|m|lpa|lakhs?|lacs?|l|cr|crores?)?\\b/gi;\n  let m;\n  while ((m = re.exec(s))) {\n    let n = m[1].replace(/[.,]$/, '');\n    if (/^\\d{1,3}(,\\d{3})+(\\.\\d+)?$/.test(n)) n = n.replace(/,/g, '');            // 1,000,000\n    else if (/^\\d{1,3}(\\.\\d{3})+$/.test(n)) n = n.replace(/\\./g, '');             // 1.000.000 (EU)\n    else n = n.replace(',', '.');                                                // 35,3k -> 35.3\n    let v = parseFloat(n);\n    if (!isFinite(v)) continue;\n    const u = (m[2] || '').toLowerCase();\n    if (u === 'k') v *= 1e3;\n    else if (u === 'm') v *= 1e6;\n    else if (/^(lpa|lakh|lakhs|lac|lacs|l)$/.test(u)) v *= 1e5;\n    else if (/^(cr|crore|crores)$/.test(u)) v *= 1e7;\n    nums.push(Math.round(v));\n  }\n  return nums;\n}\nfunction parseSalaryText(raw, origin) {\n  const text = String(raw || '').trim();\n  if (!text) return NOT_DISCLOSED();\n  if (/\\bunpaid\\b|\\bno stipend\\b|\\bvolunteer\\b/i.test(text)) return { raw: text, min: 0, max: 0, currency: '', period: '', disclosed: true, origin };\n  if (/performance[- ]based|commission only/i.test(text) && !/\\d/.test(text)) return { raw: text, min: null, max: null, currency: '', period: '', disclosed: true, origin };\n  const nums = numbersOf(text).filter((n) => n > 0);\n  if (!nums.length) return NOT_DISCLOSED();\n  return {\n    raw: text.slice(0, 200),\n    min: Math.min(...nums.slice(0, 2)),\n    max: Math.max(...nums.slice(0, 2)),\n    currency: currencyOf(text),\n    period: periodOf(text),\n    disclosed: true,\n    origin,\n  };\n}\n// Find a pay statement in free text. Requires pay context nearby so that\n// \"$50M funding\" or \"10,000 customers\" are not mistaken for salary.\nfunction findSalaryInText(text) {\n  const t = String(text || '');\n  if (/\\bunpaid (internship|position|role)\\b/i.test(t)) return parseSalaryText('Unpaid', 'description');\n  MONEY_RE.lastIndex = 0;\n  let m;\n  while ((m = MONEY_RE.exec(t))) {\n    const around = t.slice(Math.max(0, m.index - 80), m.index + m[0].length + 40);\n    if (!PAY_CONTEXT.test(around)) continue;\n    if (NOT_PAY_CONTEXT.test(around)) continue;\n    if (/\\d\\s?m\\b/i.test(m[0])) continue; // $11M etc. is never a salary\n    const parsed = parseSalaryText(m[0], 'description');\n    if (parsed.disclosed && (parsed.currency || parsed.period)) return parsed;\n  }\n  const perf = t.match(/[^.\\n]{0,60}performance[- ]based (stipend|pay|compensation)[^.\\n]{0,40}/i);\n  if (perf) return { raw: perf[0].trim(), min: null, max: null, currency: '', period: '', disclosed: true, origin: 'description' };\n  return NOT_DISCLOSED();\n}\n\n\n// Runs once per item. Validates Qwen's JSON, recomputes the score from the\n// rubric parts (never trusts a model-computed total), and verifies that any\n// compensation quote really appears in the posting.\nconst { config } = $('Config & Profile').first().json;\nconst job = $('Prepare AI Analysis').item.json.job;\nconst resp = $json;\n\nconst strArr = (v, n = 12) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean).slice(0, n) : []);\nconst clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(Number(v) || 0)));\nconst oneOf = (v, list, dflt) => (list.includes(v) ? v : dflt);\nconst squash = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9₹$€£]+/g, ' ').trim();\n\nlet a = null;\nlet error = '';\nif (resp.error) {\n  error = 'Ollama request failed: ' + String(resp.error.message || JSON.stringify(resp.error)).slice(0, 300);\n} else {\n  const content = String(resp.choices?.[0]?.message?.content ?? '').replace(/<think>[\\s\\S]*?<\\/think>/g, '').replace(/^```(json)?|```$/g, '').trim();\n  try { a = JSON.parse(content); } catch (e) { error = 'Model did not return valid JSON: ' + content.slice(0, 200); }\n}\nif (!a || typeof a !== 'object') return { json: { ok: false, error: error || 'Empty analysis', job } };\n\n// ---------- deterministic validation (nothing downstream may trust the analysis before this) ----------\n// blocking   -> analysis is not trustworthy: status REVIEW_REQUIRED, never shortlisted/packaged.\n// normalized -> an unsupported claim was removed or downgraded to unknown/unclear (recorded, not blocking).\nconst blocking = [];\nconst normalized = [];\nconst { profile, skillList, skillWhitelist = skillList } = $('Config & Profile').first().json;\nconst ENUMS = {\n  seniority: ['internship', 'entry', 'junior', 'mid', 'senior', 'unknown'],\n  locationFit: ['good', 'possible', 'poor', 'unknown'],\n  remoteFit: ['remote', 'hybrid', 'onsite', 'unknown'],\n  recommendation: ['apply', 'consider', 'skip'],\n};\nconst RANGES = { skillsScore: [0, 40], levelScore: [0, 25], locationScore: [0, 20], interestScore: [0, 15] };\nif (typeof a.isSoftwareRole !== 'boolean') blocking.push('isSoftwareRole: missing or not true/false');\nfor (const [k, list] of Object.entries(ENUMS)) if (!list.includes(a[k])) blocking.push(`${k}: ${JSON.stringify(a[k])} is not one of ${list.join('/')}`);\nfor (const [k, [lo, hi]] of Object.entries(RANGES)) if (!Number.isInteger(a[k]) || a[k] < lo || a[k] > hi) blocking.push(`${k}: ${JSON.stringify(a[k])} is not an integer ${lo}-${hi}`);\nfor (const k of ['requiredSkills', 'matchingSkills', 'missingSkills', 'experienceGap', 'why']) if (!Array.isArray(a[k])) blocking.push(`${k}: missing or not a list`);\nif (typeof a.confidence !== 'number' || a.confidence < 0 || a.confidence > 1) blocking.push('confidence: not a number 0-1');\nfor (const k of ['studentEligibility', 'evidence', 'compensationDetail']) if (!a[k] || typeof a[k] !== 'object') blocking.push(`${k}: missing`);\n\n// Evidence: a quote counts only if it appears verbatim (ignoring case/punctuation) in the posting.\nconst postingText = [job.title, job.company, job.location, job.remoteRegions, job.employmentType, job.description].filter(Boolean).join('\\n');\nconst inText = (text, q) => { const s = squash(q); return s.length >= 4 && squash(text).includes(s); };\nconst verifiedQuote = (q, label, text = postingText) => {\n  const t = String(q || '').trim();\n  if (!t) return '';\n  if (inText(text, t)) return t;\n  normalized.push(`${label}: quote not found verbatim in posting — dropped`);\n  return '';\n};\n// Deterministic fallback: first posting sentence/bullet matching a pattern (verbatim by construction).\nconst sentencesOf = (t) => String(t || '').split(/\\n+|(?<=[.!?])\\s+|•/).map((s) => s.trim()).filter((s) => s.length > 3);\nconst firstSentence = (re, reject = null) => sentencesOf(job.description).find((s) => re.test(s) && !(reject && reject.test(s)))?.slice(0, 240) || '';\nconst YEARS_RE = /\\b(\\d{1,2})\\s*\\+?\\s*(?:(?:-|–|to)\\s*\\d{1,2}\\s*\\+?\\s*)?(?:years?|yrs?|años|jahre)\\b/i;\nconst ev = a.evidence || {};\nconst evidence = {\n  experience: verifiedQuote(ev.experience, 'evidence.experience')\n    || sentencesOf(job.description).find((s) => YEARS_RE.test(s) && /experien|erfahrung/i.test(s))?.slice(0, 240) || '',\n  degree: verifiedQuote(ev.degree, 'evidence.degree') || firstSentence(/\\b(bachelor'?s?|master'?s?|ph\\.?\\s?d|degree|b\\.?\\s?tech|m\\.?\\s?tech|b\\.?\\s?sc|m\\.?\\s?sc|enrolled|enrolment|enrollment|studiengang|immatrikul|estudiante)\\b/i),\n  workArrangement: verifiedQuote(ev.workArrangement, 'evidence.workArrangement') || firstSentence(/\\b(remote|hybrid|on-?site|in-office|home[- ]based|work from home|remoto|presencial)\\b/i),\n  availability: verifiedQuote(ev.availability, 'evidence.availability') || firstSentence(/\\b(\\d+\\s*(?:hours?|hrs?|horas|stunden)\\b|\\d+\\s*(?:-|–|to)?\\s*\\d*\\s*-?\\s*months?\\b|full[- ]time commitment|start date|disponibilidad para|available (?:for|to start)|starting (?:in|on|from))/i),\n  otherConstraints: strArr(ev.otherConstraints, 5).map((q) => verifiedQuote(q, 'evidence.otherConstraints')).filter(Boolean),\n};\n\nconst parts = {\n  skills: clampInt(a.skillsScore, 0, 40),\n  level: clampInt(a.levelScore, 0, 25),\n  location: clampInt(a.locationScore, 0, 20),\n  interest: clampInt(a.interestScore, 0, 15),\n};\nlet matchScore = parts.skills + parts.level + parts.location + parts.interest;\nconst isSoftwareRole = a.isSoftwareRole !== false;\nconst caps = [];\nif (!isSoftwareRole) { matchScore = Math.min(matchScore, 20); caps.push('not a software role (capped at 20)'); }\nif (job.seniority === 'senior' || a.seniority === 'senior') { matchScore = Math.min(matchScore, 35); caps.push('senior role (capped at 35)'); }\n// Experience: years count only when the posting states them (verified evidence) — never from the model's wording.\nconst modelExp = String(a.experienceRequired || '').trim();\nconst experienceRequired = evidence.experience || (inText(postingText, modelExp) ? modelExp : 'not stated in posting');\nif (modelExp && experienceRequired !== modelExp && !/^(not stated|none|n\\/?a|0|no experience required)$/i.test(modelExp)) {\n  normalized.push(`experienceRequired: \"${modelExp.slice(0, 80)}\" not supported by the posting — replaced with ${evidence.experience ? 'posting text' : '\"not stated in posting\"'}`);\n}\nconst yrs = Number((evidence.experience.match(YEARS_RE) || [])[1] || job.minYearsRequired || 0);\nif (yrs > config.maxYearsExperience) { matchScore = Math.min(matchScore, 40); caps.push(`requires ${yrs}+ years (capped at 40)`); }\n\n// Working Student eligibility: only shortlist if the AI confirms (with a verbatim quote from\n// the posting) that students outside the hiring country can apply and the location works from India.\nlet studentEligibility = null;\nconst se = (a && a.studentEligibility) || {};\nif (!job.studentEligibilityReview) {\n  // Not a Working Student role: the model must not assert eligibility facts (e.g. an invented \"India / yes\").\n  if (['enrollmentRequired', 'openToStudentsOutsideCountry', 'locationCompatible'].some((k) => se[k] && se[k] !== 'not_applicable') || String(se.enrollmentCountry || '').trim() || String(se.evidenceQuote || '').trim()) {\n    normalized.push('studentEligibility: filled for a non-Working-Student role — reset to not_applicable');\n  }\n} else {\n  const tri = (v) => oneOf(v, ['yes', 'no', 'unclear'], 'unclear');\n  const quote = String(se.evidenceQuote || '').trim();\n  const quoteVerified = quote.length >= 8 && squash(job.description).includes(squash(quote));\n  if (quote && !quoteVerified) normalized.push('studentEligibility.evidenceQuote: not found verbatim in the job description — dropped');\n  // Every definite answer (\"yes\" or \"no\") needs a verified quote; otherwise the posting has not established it.\n  const backed = (k) => { const v = tri(se[k]); if (v !== 'unclear' && !quoteVerified) { normalized.push(`studentEligibility.${k}: \"${v}\" without verified evidence — set to unclear`); return 'unclear'; } return v; };\n  const openOutside = backed('openToStudentsOutsideCountry');\n  const enrollmentRequired = backed('enrollmentRequired');\n  const locationCompatible = backed('locationCompatible');\n  const eligible = locationCompatible !== 'no' && (\n    openOutside === 'yes' ||\n    (enrollmentRequired === 'no' && quoteVerified && locationCompatible === 'yes'));\n  let country = String(se.enrollmentCountry || '').trim();\n  if (country && !(quoteVerified && new RegExp(`\\\\b${country.replace(/[.*+?^${}()|[\\]\\\\/]/g, '\\\\$&')}\\\\b`, 'i').test(quote))) {\n    normalized.push(`studentEligibility.enrollmentCountry: \"${country}\" is not established by a verified posting quote — cleared`);\n    country = '';\n  }\n  studentEligibility = {\n    review: true, reason: job.studentEligibilityReason, eligible,\n    enrollmentRequired, enrollmentCountry: country, degreeRequirement: evidence.degree || 'unclear',\n    openToStudentsOutsideCountry: openOutside, locationCompatible,\n    evidenceQuote: quoteVerified ? quote : '',\n    note: eligible\n      ? 'Working Student role confirmed open to students outside ' + (country || 'the hiring country')\n      : `Working Student role: enrollment ${enrollmentRequired === 'yes' && quoteVerified ? 'required' : 'may be required'}${country ? ' in ' + country : ''}; not confirmed open to students in India`,\n  };\n  if (!eligible) { matchScore = Math.min(matchScore, 30); caps.push('working student eligibility not confirmed (capped at 30)'); }\n}\n\n// Compensation: source/regex value wins; otherwise accept the model's quote ONLY if it is verbatim in the posting.\n// Every component is an exact posting quote or \"\"; numbers are only ever parsed from the salary/stipend quote or the source field.\nlet compensation = job.salary;\nlet compensationNote = compensation.disclosed ? `from ${compensation.origin}` : 'not stated in posting';\nconst cd = a.compensationDetail || {};\nconst COMP_KEYS = ['salary', 'stipend', 'bonus', 'signingBonus', 'equity', 'otherCompensation'];\nconst compQuotes = Object.fromEntries(COMP_KEYS.map((k) => [k, verifiedQuote(cd[k], `compensationDetail.${k}`, job.description)]));\n// Deterministic scan so bonuses/equity are captured even when the model leaves them out.\nconst SIGNING_RE = /\\b(?:sign(?:ing|-on| on)|joining)\\s+bonus/i;\nconst COMP_SCAN = {\n  signingBonus: [SIGNING_RE, null],\n  bonus: [/\\bbonus(?:es)?\\b/i, /bonus\\s*(?:points?|skills?|:)|\\bis a bonus\\b|referral|\\bsign(?:ing|-on| on)\\s+bonus|joining\\s+bonus/i],\n  equity: [/\\b(?:equity (?:package|grant|compensation|stake|options?)|stock options?|RSUs?|share options?|ESOP|employee stock)\\b/i, null],\n  stipend: [/\\bstipend\\b/i, /\\bno stipend\\b/i],\n};\nfor (const [k, [re, reject]] of Object.entries(COMP_SCAN)) if (!compQuotes[k]) compQuotes[k] = firstSentence(re, reject);\nconst salaryQuote = compQuotes.salary || compQuotes.stipend;\nif (!compensation.disclosed && salaryQuote) {\n  const parsed = parseSalaryText(salaryQuote, 'ai-quote-verified');\n  if (parsed.disclosed) { compensation = parsed; compensationNote = 'quoted by AI, verified against posting'; }\n} else if (!compensation.disclosed && (cd.salary || cd.stipend)) {\n  compensationNote = 'AI quote rejected (not found verbatim in posting)';\n}\nconst extras = [['bonus', 'bonus'], ['signingBonus', 'signing bonus'], ['equity', 'equity'], ['otherCompensation', 'other']]\n  .filter(([k]) => compQuotes[k]).map(([k, label]) => `${label}: \"${compQuotes[k].slice(0, 140)}\"`);\nif (extras.length) compensationNote += `; ${extras.join('; ')}`;\nconst compensationDetail = {\n  ...compQuotes,\n  disclosed: Boolean(compensation.disclosed || COMP_KEYS.some((k) => compQuotes[k])),\n  evidenceQuote: COMP_KEYS.map((k) => compQuotes[k]).find(Boolean) || (compensation.origin === 'source-field' ? `job board salary field: ${compensation.raw}` : ''),\n};\n\nconst recommendation = oneOf(a.recommendation, ['apply', 'consider', 'skip'], 'consider');\nconst matchLevel = !isSoftwareRole ? 'not_relevant' : matchScore >= 80 ? 'strong' : matchScore >= 65 ? 'good' : matchScore >= 50 ? 'fair' : 'weak';\nconst shortlisted = isSoftwareRole && recommendation !== 'skip' && matchScore >= config.minMatchScore && parts.skills >= (config.minSkillsScore ?? 15)\n  && (!studentEligibility || studentEligibility.eligible);\n\n// Deterministic grounding: a \"matching\" skill must appear in the posting AND in the profile whitelist.\n// The model may name requirements, but can never add to the candidate's skill set.\nconst hay = `${job.title} ${(job.tags || []).join(' ')} ${job.description}`.toLowerCase();\nconst variants = (s) => {\n  const b = s.toLowerCase().replace(/\\s*apis?$/, '').trim();\n  return [b, b.replace(/\\.js$/, ''), b.replace(/\\./g, ''), b === 'ci/cd' ? 'continuous integration' : b, b === 'postgresql' ? 'postgres' : b, b.replace(/[\\s-]+/g, '')];\n};\nconst esc = (s) => s.replace(/[.*+?^${}()|[\\]\\\\/]/g, '\\\\$&');\nconst inPosting = (s) => variants(s).some((v) => v.length > 1 && new RegExp(`(^|[^a-z0-9])${esc(v)}([^a-z0-9]|$)`).test(hay));\nconst sameSkill = (p, s) => variants(p)[0] === variants(s)[0] || variants(p)[1] === variants(s)[1] || variants(p)[5] === variants(s)[5];\nconst inProfile = (s) => skillWhitelist.some((p) => sameSkill(p, s));\nconst canonical = (s) => skillWhitelist.find((p) => sameSkill(p, s)) || s; // always report the profile's own spelling\nconst notInProfile = strArr(a.matchingSkills, 40).filter((s) => !inProfile(s));\nif (notInProfile.length) normalized.push(`matchingSkills not in the profile (dropped): ${notInProfile.join(', ')}`);\nconst matchingSkills = [...new Set([\n  ...strArr(a.matchingSkills, 40).filter((s) => inPosting(s) && inProfile(s)).map(canonical),\n  ...skillWhitelist.filter(inPosting),\n])];\nconst notNone = (arr) => arr.filter((x) => !/^(none|n\\/a|na|nothing|-)$/i.test(x));\nconst mentions = (text, term) => new RegExp(`(^|[^a-z0-9])${esc(term.toLowerCase())}([^a-z0-9]|$)`).test(String(text).toLowerCase());\n\n// \"why\" bullets may not credit the candidate with a skill outside the profile.\nconst NEG_RE = /\\b(lack|lacks|lacking|missing|no|not|without|doesn't|don't|never|unfamiliar|gap|learn)\\b/i;\nconst POS_RE = /\\b(has|have|having|experience|experienced|proficien\\w*|skilled|knows?|expertise|familiar)\\b/i;\nconst foreignTerms = [...new Set([...notInProfile, ...strArr(a.missingSkills, 30)])].filter((s) => s.length > 1 && !inProfile(s));\nconst why = strArr(a.why, 5).filter((b) => {\n  const bad = POS_RE.test(b) && !NEG_RE.test(b) && foreignTerms.some((t) => mentions(b, t));\n  if (bad) normalized.push(`why: dropped claim crediting a non-profile skill: \"${b.slice(0, 120)}\"`);\n  return !bad;\n});\n\n// Gaps: drop model-invented year requirements; add deterministic degree / availability gaps with exact posting text.\nconst gapLines = notNone(strArr(a.experienceGap, 6)).filter((g) => {\n  const m = g.match(YEARS_RE);\n  if (m && !(evidence.experience.match(YEARS_RE) || [])[1]) { normalized.push(`experienceGap: dropped unsupported years claim \"${g.slice(0, 100)}\"`); return false; }\n  return true;\n});\nconst degreeGap = /\\b(master'?s?|m\\.?\\s?sc|m\\.?\\s?tech|ph\\.?\\s?d|doctorate|máster|magíster)\\b/i.test(evidence.degree)\n  ? [`Degree requirement (profile: ${profile.education.degree}, expected ${profile.education.expectedGraduation}): \"${evidence.degree}\"`] : [];\nconst availabilityRequirement = evidence.availability\n  ? { quote: evidence.availability, status: inText(profile.availability, evidence.availability) ? 'confirmed' : 'needs_confirmation' } : { quote: '', status: 'not_stated' };\nconst availabilityGap = availabilityRequirement.status === 'needs_confirmation'\n  ? [`Availability needs confirmation — posting: \"${evidence.availability}\"; profile: \"${profile.availability}\"`] : [];\n\n// Work arrangement: a remote/on-site claim needs job-board metadata or posting text.\nlet remoteFit = oneOf(a.remoteFit, ENUMS.remoteFit, 'unknown');\nconst arrangementText = `${evidence.workArrangement} ${job.location || ''} ${job.remoteRegions || ''}`;\nconst arrangementBacked = { remote: job.remote === true || /remote|anywhere|home[- ]based|work from home|remoto/i.test(arrangementText), hybrid: /hybrid|híbrido/i.test(arrangementText), onsite: job.remote === false || /on-?site|in-office|presencial/i.test(arrangementText), unknown: true };\nif (!arrangementBacked[remoteFit]) { normalized.push(`remoteFit: \"${remoteFit}\" not supported by the posting — set to unknown`); remoteFit = 'unknown'; }\n\nconst validation = { ok: blocking.length === 0, blocking, normalized };\nconst analysis = {\n  matchScore,\n  matchLevel,\n  scoreBreakdown: {\n    ...parts, caps, rubric: 'skills 0-40, level 0-25, location 0-20, interest 0-15', ...(studentEligibility ? { studentEligibility } : {}),\n    validation, evidence, compensation: compensationDetail, availabilityRequirement, degreeRequirement: evidence.degree,\n  },\n  why,\n  matchingSkills,\n  missingSkills: notNone(strArr(a.missingSkills)).filter((x) => !inProfile(x)),\n  experienceGap: [...(studentEligibility && !studentEligibility.eligible ? [studentEligibility.note] : []), ...degreeGap, ...availabilityGap, ...gapLines],\n  studentEligibility,\n  experienceRequired,\n  languageRequirement: String(a.languageRequirement || ''),\n  seniority: oneOf(a.seniority, ENUMS.seniority, 'unknown'),\n  locationFit: oneOf(a.locationFit, ENUMS.locationFit, 'unknown'),\n  remoteFit,\n  compensation,\n  compensationNote,\n  compensationDetail,\n  availabilityRequirement,\n  validation,\n  recommendation,\n  confidence: Math.max(0, Math.min(1, Number(a.confidence) || 0)),\n  isSoftwareRole,\n};\n\n// Package gate: only a validated analysis can ever be SHORTLISTED (and therefore packaged).\nconst status = !validation.ok ? 'REVIEW_REQUIRED' : shortlisted ? 'SHORTLISTED' : (isSoftwareRole ? 'ANALYZED' : 'IGNORED');\nreturn {\n  json: {\n    ok: true,\n    job,\n    analysis,\n    status,\n  },\n};\n"
+      },
+      "id": "c38b8795-80a0-527f-9cd6-254ec5bb66cf",
+      "name": "Parse & Validate Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2912,
+        688
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Only successful analyses are stored\n// Flattens job + analysis into exactly the columns of the `job_hunt_jobs` data table.\nconst nowIso = new Date().toISOString();\nconst list = (arr) => (arr || []).join('\\n');\nreturn $input.all().filter((i) => i.json.ok).map(({ json: { job, analysis: a, status } }) => ({\n  json: {\n    jobKey: job.jobKey,\n    status,\n    title: job.title,\n    company: job.company,\n    location: job.location,\n    remote: job.remote,\n    remoteRegions: job.remoteRegions,\n    employmentType: job.employmentType,\n    seniority: a.seniority,\n    source: job.source,\n    sources: JSON.stringify(job.sources),\n    sourceUrl: job.sourceUrl,\n    applicationUrl: job.applicationUrl,\n    postedAt: job.postedAt,\n    discoveredAt: job.discoveredAt,\n    salaryRaw: a.compensation.raw,\n    salaryMin: a.compensation.min,\n    salaryMax: a.compensation.max,\n    salaryCurrency: a.compensation.currency,\n    salaryPeriod: a.compensation.period,\n    salaryDisclosed: a.compensation.disclosed,\n    salaryNote: a.compensationNote,\n    matchScore: a.matchScore,\n    matchLevel: a.matchLevel,\n    recommendation: a.recommendation,\n    confidence: a.confidence,\n    scoreBreakdown: JSON.stringify(a.scoreBreakdown),\n    why: list(a.why),\n    matchingSkills: list(a.matchingSkills),\n    missingSkills: list(a.missingSkills),\n    experienceGap: list(a.experienceGap),\n    experienceRequired: a.experienceRequired,\n    languageRequirement: a.languageRequirement,\n    description: job.description,\n    resume: '',\n    coverLetter: '',\n    answers: '',\n    packageGeneratedAt: '',\n    notes: '',\n    statusUpdatedAt: nowIso,\n  },\n}));\n"
+      },
+      "id": "901eaab2-bcce-532d-b9dc-e6902c80bd78",
+      "name": "Build Job Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3136,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "job_hunt_jobs"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "jobKey",
+              "keyValue": "={{ $json.jobKey }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "3c339f95-e7b0-5f18-a180-a8f2010ad04c",
+      "name": "Store Job",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        3360,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Analysis failures are NOT stored in job_hunt_jobs, so the job is retried next run.\n// They are logged to job_hunt_runs so failures are visible, not swallowed.\nreturn $input.all().filter((i) => !i.json.ok).map(({ json }) => ({\n  json: {\n    runAt: $('Config & Profile').first().json.runStartedAt,\n    kind: 'analysis_error',\n    source: json.job?.source || '',\n    message: String(json.error || 'unknown error').slice(0, 1000),\n    details: `${json.job?.title || ''} @ ${json.job?.company || ''} (${json.job?.jobKey || ''})`,\n  },\n}));\n"
+      },
+      "id": "159b6720-df34-52e7-b30b-5b7cfbcadb0b",
+      "name": "Build Failure Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3136,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "job_hunt_runs"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "510f41d4-31be-5383-aaa9-06b573bf8b8b",
+      "name": "Log Analysis Failures",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        3360,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rows coming back from \"Store Job\" (full data-table rows incl. `id`).\n// Only the best N shortlisted jobs get the (slow) document generation.\nconst { config } = $('Config & Profile').first().json;\nreturn $input.all()\n  .map((i) => i.json)\n  // Package gate: only rows whose analysis passed deterministic validation (REVIEW_REQUIRED rows never reach here).\n  .filter((r) => r.status === 'SHORTLISTED' && (() => { try { return JSON.parse(r.scoreBreakdown || '{}').validation?.ok === true; } catch { return false; } })())\n  .sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0))\n  .slice(0, config.maxPackagesPerRun)\n  .map((row) => ({ json: row }));\n"
+      },
+      "id": "5bd1ef16-8c70-5455-b3ec-18616d4d5297",
+      "name": "Select Shortlist",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3584,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const { config, profile } = $('Config & Profile').first().json;\nconst row = $('Select Shortlist').item.json;\nconst GROUNDING = `STRICT RULES:\n- Use ONLY facts from CANDIDATE PROFILE. Never invent employers, internships, projects, metrics, numbers, dates, achievements, certifications, grades, or technologies.\n- When describing a project, use ONLY its summary, tech and highlights from the profile. Do not add features, users, results or technologies to it.\n- If the job asks for something the candidate does not have, do NOT claim it. You may say the candidate is eager to learn it.\n- Keep any [BRACKETED PLACEHOLDER] from the profile exactly as-is so the candidate can fill it in.\n- Facts about the company/role may come ONLY from the JOB POSTING.\n- No preamble, no explanations, no closing remarks. Output only the requested document.\n${buildFacts(profile)}`;\n// Deterministic facts block built from the profile: the only allowed availability, experience,\n// education and per-project technologies. Package text is validated against the same data afterwards.\nfunction buildFacts(p) {\n  const exp = p.experience.map((e) => `${e.role} at ${e.organization} (${e.start} – ${e.end || 'present'}${e.end ? ', ended' : ''}${/intern/i.test(e.role) ? '' : '; not an internship'})`).join('; ') || 'none';\n  return `VERIFIED FACTS (use exactly as written; never go beyond them):\n- Availability: \"${p.availability}\". Never state hours per week, a number of months, full-time/part-time commitment, a start date or \"immediately\".\n- Professional experience: ${exp}. Never state or imply years of experience.\n- Education: ${p.education.degree}, ${p.education.institution} — ${p.education.status}, expected graduation ${p.education.expectedGraduation}.\n- Project technologies — when naming a project, mention ONLY technologies from its list: ${p.projects.map((x) => `${x.name}: ${x.tech.join(', ')}`).join(' | ')}.\n- Never write \"extensive experience\", \"proven track record\", \"production-grade\", \"expert\", \"seasoned\" or \"years of experience\".\n- Never state salary expectations, work authorization/visa status, spoken-language fluency or relocation willingness.`;\n}\nconst jobBlock = `JOB POSTING\nTitle: ${row.title}\nCompany: ${row.company}\nLocation: ${row.location}\nMatching skills (verified): ${String(row.matchingSkills || '').split('\\n').join(', ') || 'none'}\nJob requirements NOT in the candidate profile (never claim these): ${String(row.missingSkills || '').split('\\n').join(', ') || 'none'}\n\nDescription:\n${String(row.description || '').slice(0, 5000)}`;\nconst profileBlock = `CANDIDATE PROFILE (the only source of truth about the candidate)\\n${JSON.stringify(profile, null, 1)}`;\n// qwen3 leaks its reasoning into plain-text replies even with think:false, so every\n// generation call is forced into a JSON schema; the document lives in one string field.\nconst docFormat = { type: 'object', properties: { document: { type: 'string' } }, required: ['document'] };\nconst chat = (system, user, extra = {}) => ({\n  model: config.model, stream: false, think: false, keep_alive: '15m',\n  options: { temperature: 0.2, seed: 42, num_ctx: 12288, num_predict: 1400 },\n  format: docFormat,\n  messages: [{ role: 'system', content: system }, { role: 'user', content: user + '\\n/no_think' }],\n  ...extra,\n});\nconst modelRaw = (resp) => (resp && !resp.error ? String(resp.message?.content || '').replace(/<think>[\\s\\S]*?<\\/think>/g, '').trim() : '');\nconst modelText = (resp) => {\n  const raw = modelRaw(resp);\n  try { return String(JSON.parse(raw).document || '').trim(); } catch { return ''; }\n};\nconst resumeFormat = {\n  type: 'object',\n  properties: {\n    summary: { type: 'string' },\n    skillsOrdered: { type: 'array', items: { type: 'string' } },\n    projects: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, bullets: { type: 'array', items: { type: 'string' } } }, required: ['name', 'bullets'] } },\n  },\n  required: ['summary', 'skillsOrdered', 'projects'],\n};\nconst system = `You tailor resume content for a software engineering internship application. Respond ONLY with JSON matching the schema.\n${GROUNDING}\n- summary: a short professional summary of the candidate written for this role (write the actual summary text, not a description of it).\n- skillsOrdered: the candidate's profile skills, most relevant to this job first. Only skills that exist in the profile.\n- projects: every profile project (same names), 1-3 bullets each. Bullets may only rephrase that project's summary/tech/highlights to emphasise relevance to the job.`;\nreturn { json: { ollamaRequest: chat(system, `${profileBlock}\\n\\n${jobBlock}`, { format: resumeFormat }) } };\n"
+      },
+      "id": "8d4cc401-19ed-505c-904b-2e9ddd2fb226",
+      "name": "Prepare Resume Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3808,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.ollamaRequest.model, messages: $json.ollamaRequest.messages, temperature: $json.ollamaRequest.options.temperature, seed: $json.ollamaRequest.options.seed, max_tokens: $json.ollamaRequest.options.num_predict, response_format: { type: 'json_schema', json_schema: { name: 'job_hunt_output', strict: false, schema: $json.ollamaRequest.format } }, provider: { require_parameters: true }, reasoning: { enabled: false } }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 0
+            }
+          },
+          "timeout": 900000
+        }
+      },
+      "id": "09e8a73a-c449-559d-9b25-8dc632753a47",
+      "name": "Generate Tailored Resume with Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4032,
+        592
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const { config, profile } = $('Config & Profile').first().json;\nconst row = $('Select Shortlist').item.json;\nconst GROUNDING = `STRICT RULES:\n- Use ONLY facts from CANDIDATE PROFILE. Never invent employers, internships, projects, metrics, numbers, dates, achievements, certifications, grades, or technologies.\n- When describing a project, use ONLY its summary, tech and highlights from the profile. Do not add features, users, results or technologies to it.\n- If the job asks for something the candidate does not have, do NOT claim it. You may say the candidate is eager to learn it.\n- Keep any [BRACKETED PLACEHOLDER] from the profile exactly as-is so the candidate can fill it in.\n- Facts about the company/role may come ONLY from the JOB POSTING.\n- No preamble, no explanations, no closing remarks. Output only the requested document.\n${buildFacts(profile)}`;\n// Deterministic facts block built from the profile: the only allowed availability, experience,\n// education and per-project technologies. Package text is validated against the same data afterwards.\nfunction buildFacts(p) {\n  const exp = p.experience.map((e) => `${e.role} at ${e.organization} (${e.start} – ${e.end || 'present'}${e.end ? ', ended' : ''}${/intern/i.test(e.role) ? '' : '; not an internship'})`).join('; ') || 'none';\n  return `VERIFIED FACTS (use exactly as written; never go beyond them):\n- Availability: \"${p.availability}\". Never state hours per week, a number of months, full-time/part-time commitment, a start date or \"immediately\".\n- Professional experience: ${exp}. Never state or imply years of experience.\n- Education: ${p.education.degree}, ${p.education.institution} — ${p.education.status}, expected graduation ${p.education.expectedGraduation}.\n- Project technologies — when naming a project, mention ONLY technologies from its list: ${p.projects.map((x) => `${x.name}: ${x.tech.join(', ')}`).join(' | ')}.\n- Never write \"extensive experience\", \"proven track record\", \"production-grade\", \"expert\", \"seasoned\" or \"years of experience\".\n- Never state salary expectations, work authorization/visa status, spoken-language fluency or relocation willingness.`;\n}\nconst jobBlock = `JOB POSTING\nTitle: ${row.title}\nCompany: ${row.company}\nLocation: ${row.location}\nMatching skills (verified): ${String(row.matchingSkills || '').split('\\n').join(', ') || 'none'}\nJob requirements NOT in the candidate profile (never claim these): ${String(row.missingSkills || '').split('\\n').join(', ') || 'none'}\n\nDescription:\n${String(row.description || '').slice(0, 5000)}`;\nconst profileBlock = `CANDIDATE PROFILE (the only source of truth about the candidate)\\n${JSON.stringify(profile, null, 1)}`;\n// qwen3 leaks its reasoning into plain-text replies even with think:false, so every\n// generation call is forced into a JSON schema; the document lives in one string field.\nconst docFormat = { type: 'object', properties: { document: { type: 'string' } }, required: ['document'] };\nconst chat = (system, user, extra = {}) => ({\n  model: config.model, stream: false, think: false, keep_alive: '15m',\n  options: { temperature: 0.2, seed: 42, num_ctx: 12288, num_predict: 1400 },\n  format: docFormat,\n  messages: [{ role: 'system', content: system }, { role: 'user', content: user + '\\n/no_think' }],\n  ...extra,\n});\nconst modelRaw = (resp) => (resp && !resp.error ? String(resp.choices?.[0]?.message?.content || '').replace(/<think>[\\s\\S]*?<\\/think>/g, '').trim() : '');\nconst modelText = (resp) => {\n  const raw = modelRaw(resp);\n  try { return String(JSON.parse(raw).document || '').trim(); } catch { return ''; }\n};\n// Render the resume Markdown in code: header/education come straight from the profile,\n// and only skills/projects that exist in the profile survive.\nlet resumeMd = '';\ntry {\n  const r = JSON.parse(modelRaw($json));\n  const allSkills = Object.values(profile.skills).flat();\n  const norm = (s) => String(s).toLowerCase().trim();\n  const skills = [...new Set([\n    ...(r.skillsOrdered || []).map((s) => allSkills.find((p) => norm(p) === norm(s))).filter(Boolean),\n    ...allSkills,\n  ])];\n  const projects = profile.projects.map((p) => {\n    const gen = (r.projects || []).find((g) => norm(g.name) === norm(p.name));\n    const bullets = gen && Array.isArray(gen.bullets) && gen.bullets.length ? gen.bullets : [p.summary];\n    return `**${p.name}**${p.tech.length ? ' — ' + p.tech.join(', ') : ''}\\n${bullets.slice(0, 3).map((b) => `- ${String(b).trim()}`).join('\\n')}`;\n  });\n  const l = profile.links;\n  resumeMd = [\n    `# ${profile.name}`,\n    [profile.email, profile.phone, profile.location, l.github, l.linkedin, l.portfolio].filter(Boolean).join(' | '),\n    '', '## Summary', (/sentences|targeted at this role|^\\s*$/i.test(String(r.summary || ''))\n      ? `${profile.education.status} focused on ${profile.interests.slice(0, 3).join(', ')}, working with ${allSkills.slice(0, 6).join(', ')}.`\n      : String(r.summary).trim()),\n    '', '## Skills', skills.join(' · '),\n    '', '## Projects', projects.join('\\n\\n'),\n    '', '## Open Source', profile.openSource.map((o) => (typeof o === 'string' ? `- ${o}`\n      : `**${o.project}**${o.tech?.length ? ' — ' + o.tech.join(', ') : ''}\\n- ${o.contribution}${o.bounty ? ` (${o.bounty} bounty)` : ''}${o.url ? `\\n- ${o.url}` : ''}`)).join('\\n\\n'),\n    '', '## Experience', profile.experience.length ? profile.experience.map((e) => (typeof e === 'string' ? `- ${e}`\n      : `**${e.role}**, ${e.organization}${e.location ? ' — ' + e.location : ''} (${e.start} – ${e.end || 'Present'})\\n${(e.bullets || []).map((b) => `- ${b}`).join('\\n')}`)).join('\\n\\n') : '_No professional experience listed._',\n    '', '## Education',\n    `${profile.education.degree}, ${profile.education.institution} — ${profile.education.status}, expected ${profile.education.expectedGraduation}`,\n  ].join('\\n');\n} catch { resumeMd = ''; }\n\nconst system = `You write a concise cover letter (180-250 words, plain text) for the job below. Put the whole letter in the \"document\" field.\n${GROUNDING}\n- Address it to the hiring team at ${row.company || 'the company'}.\n- Connect 2-3 REAL profile skills/projects to specific requirements in the posting.\n- Be honest about being a student; do not overclaim.\n- Sign off with the candidate's name from the profile.`;\nreturn { json: { resumeMd, ollamaRequest: chat(system, `${profileBlock}\\n\\n${jobBlock}`) } };\n"
+      },
+      "id": "57d9cb2d-cd99-5777-b5a6-d87004101e02",
+      "name": "Prepare Cover Letter Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4256,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.ollamaRequest.model, messages: $json.ollamaRequest.messages, temperature: $json.ollamaRequest.options.temperature, seed: $json.ollamaRequest.options.seed, max_tokens: $json.ollamaRequest.options.num_predict, response_format: { type: 'json_schema', json_schema: { name: 'job_hunt_output', strict: false, schema: $json.ollamaRequest.format } }, provider: { require_parameters: true }, reasoning: { enabled: false } }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 0
+            }
+          },
+          "timeout": 900000
+        }
+      },
+      "id": "0719b7e3-79aa-5781-92e6-503484832b2f",
+      "name": "Generate Cover Letter with Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4480,
+        592
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const { config, profile } = $('Config & Profile').first().json;\nconst row = $('Select Shortlist').item.json;\nconst GROUNDING = `STRICT RULES:\n- Use ONLY facts from CANDIDATE PROFILE. Never invent employers, internships, projects, metrics, numbers, dates, achievements, certifications, grades, or technologies.\n- When describing a project, use ONLY its summary, tech and highlights from the profile. Do not add features, users, results or technologies to it.\n- If the job asks for something the candidate does not have, do NOT claim it. You may say the candidate is eager to learn it.\n- Keep any [BRACKETED PLACEHOLDER] from the profile exactly as-is so the candidate can fill it in.\n- Facts about the company/role may come ONLY from the JOB POSTING.\n- No preamble, no explanations, no closing remarks. Output only the requested document.\n${buildFacts(profile)}`;\n// Deterministic facts block built from the profile: the only allowed availability, experience,\n// education and per-project technologies. Package text is validated against the same data afterwards.\nfunction buildFacts(p) {\n  const exp = p.experience.map((e) => `${e.role} at ${e.organization} (${e.start} – ${e.end || 'present'}${e.end ? ', ended' : ''}${/intern/i.test(e.role) ? '' : '; not an internship'})`).join('; ') || 'none';\n  return `VERIFIED FACTS (use exactly as written; never go beyond them):\n- Availability: \"${p.availability}\". Never state hours per week, a number of months, full-time/part-time commitment, a start date or \"immediately\".\n- Professional experience: ${exp}. Never state or imply years of experience.\n- Education: ${p.education.degree}, ${p.education.institution} — ${p.education.status}, expected graduation ${p.education.expectedGraduation}.\n- Project technologies — when naming a project, mention ONLY technologies from its list: ${p.projects.map((x) => `${x.name}: ${x.tech.join(', ')}`).join(' | ')}.\n- Never write \"extensive experience\", \"proven track record\", \"production-grade\", \"expert\", \"seasoned\" or \"years of experience\".\n- Never state salary expectations, work authorization/visa status, spoken-language fluency or relocation willingness.`;\n}\nconst jobBlock = `JOB POSTING\nTitle: ${row.title}\nCompany: ${row.company}\nLocation: ${row.location}\nMatching skills (verified): ${String(row.matchingSkills || '').split('\\n').join(', ') || 'none'}\nJob requirements NOT in the candidate profile (never claim these): ${String(row.missingSkills || '').split('\\n').join(', ') || 'none'}\n\nDescription:\n${String(row.description || '').slice(0, 5000)}`;\nconst profileBlock = `CANDIDATE PROFILE (the only source of truth about the candidate)\\n${JSON.stringify(profile, null, 1)}`;\n// qwen3 leaks its reasoning into plain-text replies even with think:false, so every\n// generation call is forced into a JSON schema; the document lives in one string field.\nconst docFormat = { type: 'object', properties: { document: { type: 'string' } }, required: ['document'] };\nconst chat = (system, user, extra = {}) => ({\n  model: config.model, stream: false, think: false, keep_alive: '15m',\n  options: { temperature: 0.2, seed: 42, num_ctx: 12288, num_predict: 1400 },\n  format: docFormat,\n  messages: [{ role: 'system', content: system }, { role: 'user', content: user + '\\n/no_think' }],\n  ...extra,\n});\nconst modelRaw = (resp) => (resp && !resp.error ? String(resp.choices?.[0]?.message?.content || '').replace(/<think>[\\s\\S]*?<\\/think>/g, '').trim() : '');\nconst modelText = (resp) => {\n  const raw = modelRaw(resp);\n  try { return String(JSON.parse(raw).document || '').trim(); } catch { return ''; }\n};\nconst coverLetter = modelText($json);\nconst questions = config.applicationQuestions;\nconst system = `You draft answers to job application questions for the candidate. Respond ONLY with JSON matching the schema.\n${GROUNDING}\n- 60-120 words per answer, first person, specific to this job and company.\n- Availability/start-date questions: use the profile \"availability\" field verbatim (it may be a placeholder).\n- If an answer needs information that is not in the profile (e.g. salary expectations, work authorization, relocation, notice period, a specific start date, years of experience), write \"NEEDS USER INPUT: <what is needed>\" instead of guessing.`;\nconst format = {\n  type: 'object',\n  properties: { answers: { type: 'array', items: { type: 'object', properties: { question: { type: 'string' }, answer: { type: 'string' } }, required: ['question', 'answer'] } } },\n  required: ['answers'],\n};\nreturn { json: {\n  resumeMd: $('Prepare Cover Letter Prompt').item.json.resumeMd,\n  coverLetter,\n  ollamaRequest: chat(system, `${profileBlock}\\n\\n${jobBlock}\\n\\nQUESTIONS:\\n${questions.map((q, i) => `${i + 1}. ${q}`).join('\\n')}`, { format }),\n} };\n"
+      },
+      "id": "e0a991d4-f3ab-5a3d-b7a8-6768b1d7af6a",
+      "name": "Prepare Answers Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4704,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.ollamaRequest.model, messages: $json.ollamaRequest.messages, temperature: $json.ollamaRequest.options.temperature, seed: $json.ollamaRequest.options.seed, max_tokens: $json.ollamaRequest.options.num_predict, response_format: { type: 'json_schema', json_schema: { name: 'job_hunt_output', strict: false, schema: $json.ollamaRequest.format } }, provider: { require_parameters: true }, reasoning: { enabled: false } }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 0
+            }
+          },
+          "timeout": 900000
+        }
+      },
+      "id": "0c158812-7673-5767-8a74-449f62212ce5",
+      "name": "Generate Application Answers with Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4928,
+        592
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const { config, profile } = $('Config & Profile').first().json;\nconst row = $('Select Shortlist').item.json;\nconst GROUNDING = `STRICT RULES:\n- Use ONLY facts from CANDIDATE PROFILE. Never invent employers, internships, projects, metrics, numbers, dates, achievements, certifications, grades, or technologies.\n- When describing a project, use ONLY its summary, tech and highlights from the profile. Do not add features, users, results or technologies to it.\n- If the job asks for something the candidate does not have, do NOT claim it. You may say the candidate is eager to learn it.\n- Keep any [BRACKETED PLACEHOLDER] from the profile exactly as-is so the candidate can fill it in.\n- Facts about the company/role may come ONLY from the JOB POSTING.\n- No preamble, no explanations, no closing remarks. Output only the requested document.`;\nconst jobBlock = `JOB POSTING\nTitle: ${row.title}\nCompany: ${row.company}\nLocation: ${row.location}\nMatching skills (verified): ${String(row.matchingSkills || '').split('\\n').join(', ') || 'none'}\nJob requirements NOT in the candidate profile (never claim these): ${String(row.missingSkills || '').split('\\n').join(', ') || 'none'}\n\nDescription:\n${String(row.description || '').slice(0, 5000)}`;\nconst profileBlock = `CANDIDATE PROFILE (the only source of truth about the candidate)\\n${JSON.stringify(profile, null, 1)}`;\n// qwen3 leaks its reasoning into plain-text replies even with think:false, so every\n// generation call is forced into a JSON schema; the document lives in one string field.\nconst docFormat = { type: 'object', properties: { document: { type: 'string' } }, required: ['document'] };\nconst chat = (system, user, extra = {}) => ({\n  model: config.model, stream: false, think: false, keep_alive: '15m',\n  options: { temperature: 0.2, seed: 42, num_ctx: 12288, num_predict: 1400 },\n  format: docFormat,\n  messages: [{ role: 'system', content: system }, { role: 'user', content: user + '\\n/no_think' }],\n  ...extra,\n});\nconst modelRaw = (resp) => (resp && !resp.error ? String(resp.choices?.[0]?.message?.content || '').replace(/<think>[\\s\\S]*?<\\/think>/g, '').trim() : '');\nconst modelText = (resp) => {\n  const raw = modelRaw(resp);\n  try { return String(JSON.parse(raw).document || '').trim(); } catch { return ''; }\n};\n// Combines the three generated documents and runs a cheap fabrication check:\n// flags numbers and job-only skills that appear in generated text but not in the profile.\nconst prev = $('Prepare Answers Prompt').item.json;\nlet answersMd = '';\nconst errors = [];\nconst raw = modelRaw($json);\nif (!raw) errors.push('answers: ' + String($json.error?.message || 'empty response'));\ntry {\n  const parsed = JSON.parse(raw);\n  answersMd = (parsed.answers || []).map((a) => `**${String(a.question).trim()}**\\n${String(a.answer).trim()}`).join('\\n\\n');\n} catch { if (raw) answersMd = raw; }\nif (!prev.resumeMd) errors.push('resume: empty response');\nif (!prev.coverLetter) errors.push('cover letter: empty response');\n\nconst profileText = JSON.stringify(profile).toLowerCase();\nconst generated = `${prev.resumeMd}\\n${prev.coverLetter}\\n${answersMd}`;\nconst warnings = [];\nconst nums = [...new Set((generated.match(/\\b\\d+(?:[.,]\\d+)?\\s?(?:%|\\+|x\\b|k\\b|users|requests|ms\\b)/gi) || []))]\n  .filter((n) => !profileText.includes(n.toLowerCase()));\nif (nums.length) warnings.push(`Numbers not in your profile: ${nums.slice(0, 8).join(', ')}`);\nconst profilePlaceholders = new Set((JSON.stringify(profile).match(/\\[[^\\[\\]\"]+\\]/g) || []));\nconst badPlaceholders = [...new Set(generated.match(/\\[[^\\[\\]\\n]{2,80}\\]/g) || [])].filter((p) => !profilePlaceholders.has(p) && !/^\\[FILL IN/.test(p));\nif (badPlaceholders.length) warnings.push(`Mangled placeholders: ${badPlaceholders.join(', ')}`);\nconst leftover = [...profilePlaceholders].filter((p) => generated.includes(p));\nif (leftover.length) warnings.push(`Fill in before sending: ${leftover.join(', ')}`);\n\n// ---------- deterministic package validation: any issue => packageStatus REVIEW_REQUIRED ----------\n// Checks only model-written text (resume summary/bullets, cover letter, answers); the rest of the\n// resume Markdown is rendered in code straight from the profile.\nconst issues = [];\nconst { skillWhitelist = Object.values(profile.skills).flat() } = $('Config & Profile').first().json;\nconst postingText = String(row.description || '').toLowerCase();\nlet resumeLlm = '';\ntry {\n  const r = JSON.parse(modelRaw($('Generate Tailored Resume with Gemini').item.json));\n  resumeLlm = [r.summary, ...(r.projects || []).flatMap((p) => p.bullets || [])].map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join('\\n');\n} catch { resumeLlm = prev.resumeMd; }\nconst docs = { resume: resumeLlm, 'cover letter': prev.coverLetter, answers: answersMd };\nconst escRe = (s) => s.replace(/[.*+?^${}()|[\\]\\\\/]/g, '\\\\$&');\nconst termRe = (term, cs = false) => new RegExp(`(^|[^A-Za-z0-9])${escRe(term).replace(/\\\\?[ -]/g, '[ -]?')}([^A-Za-z0-9]|$)`, cs ? '' : 'i');\nconst hasWord = (text, term, cs = false) => termRe(term, cs).test(text);\nconst sentencesOf = (t) => String(t || '').split(/(?<=[.!?])\\s+|\\n+/).map((s) => s.trim()).filter(Boolean);\nconst HEDGE_RE = /\\b(learn|learning|eager|not yet|haven't|have not|hasn't|no (?:prior |professional |hands-on )?experience|lack|unfamiliar|pick up|new to|would like to|excited to explore|keen to|don't|do not|while i|although)\\b/i;\nconst FIRST_PERSON_RE = /\\b(I|I'm|I am|I've|my|me)\\b/;\nconst add = (doc, what, text) => issues.push(`${doc}: ${what} — \"${String(text).trim().slice(0, 140)}\"`);\n\n// 1-2. Rendering / format leaks.\nfor (const [doc, text] of Object.entries({ ...docs, 'resume markdown': prev.resumeMd })) {\n  if (/\\[object Object\\]/.test(text)) add(doc, '[object Object] in text', '[object Object]');\n  if (/^\\s*[\\[{]/.test(text) || /\"(?:document|answers|question|answer|summary|skillsOrdered|projects)\"\\s*:/.test(text)) add(doc, 'raw JSON in text', text.slice(0, 80));\n}\nif (errors.length) issues.push(...errors.map((e) => `generation error: ${e}`));\n\n// 3. Technologies that are not in the profile (a hedged \"eager to learn X\" is fine).\nconst TECH_VOCAB = ['Python', 'Java', 'Go', 'Golang', 'Rust', 'C++', 'C#', 'Kotlin', 'Swift', 'Ruby', 'PHP', 'Scala', 'Kubernetes', 'Terraform', 'Ansible',\n  'AWS', 'GCP', 'Google Cloud', 'Azure', 'OpenStack', 'Ceph', 'Hadoop', 'Spark', 'Kafka', 'RabbitMQ', 'GraphQL', 'gRPC', 'MongoDB', 'MySQL', 'SQLite',\n  'DynamoDB', 'Elasticsearch', 'Drizzle', 'NextAuth', 'Firebase', 'Vue', 'Angular', 'Svelte', 'Django', 'Flask', 'FastAPI', 'Spring', 'Laravel',\n  'Flutter', 'React Native', 'TensorFlow', 'PyTorch', 'Hugging Face', 'OpenAI', 'Anthropic', 'Claude', 'Grok', 'LlamaIndex', 'Pinecone', 'Jenkins',\n  'GitLab CI', 'CircleCI', 'Git', 'Jira', 'Figma', 'AutoCAD', 'Microsoft Office', 'Excel', 'Tableau', 'Power BI', 'Snowflake', 'Airflow', 'Helm',\n  'Prometheus', 'Grafana', 'Webpack', 'Jest', 'Cypress', 'Playwright', 'Redux', 'Bootstrap', 'OAuth', 'JWT', 'Networking', 'Microservices'];\nconst CASE_SENSITIVE = new Set(['Go', 'Git', 'Spark', 'Swift', 'Excel', 'Grok', 'Networking', 'Microservices', 'Spring', 'Helm', 'Jest']);\nconst inWhitelist = (t) => skillWhitelist.some((s) => s.toLowerCase() === t.toLowerCase() || s.toLowerCase().replace(/\\.js$/, '') === t.toLowerCase());\nconst foreign = [...new Set([...TECH_VOCAB, ...String(row.missingSkills || '').split('\\n').map((s) => s.trim()).filter((s) => s.length > 1)])]\n  .filter((t) => !inWhitelist(t) && !hasWord(profileText, t.toLowerCase()));\nfor (const [doc, text] of Object.entries(docs)) {\n  for (const s of sentencesOf(text)) {\n    if (HEDGE_RE.test(s)) continue;\n    const hits = foreign.filter((t) => hasWord(s, t, CASE_SENSITIVE.has(t)));\n    if (hits.length) add(doc, `technology not in profile (${hits.join(', ')})`, s);\n  }\n}\n\n// 4. A sentence naming a project may only attach that project's own technologies. With several projects in one\n// sentence, each technology belongs to the closest project named before it (else the closest after it);\n// a sentence starting \"It / This project / The project\" continues the previous sentence's project.\nconst CONCEPTS = new Set([...(profile.skills.other || []), 'Event-Driven Architecture', 'REST APIs', 'LLM tool-calling', 'HTML/CSS', 'SQL'].map((s) => s.toLowerCase()));\nconst vocab = [...new Set([...skillWhitelist, ...TECH_VOCAB, 'Express', 'Docker Compose', 'Nginx', 'MinIO', 'continuous integration', 'continuous deployment'])]\n  .filter((t) => !CONCEPTS.has(t.toLowerCase()));\nconst allowedFor = (p) => [p.name, p.summary, ...p.tech, ...p.highlights].join(' ').toLowerCase();\nconst techAllowed = (p, t) => hasWord(allowedFor(p), t.toLowerCase()) || hasWord(allowedFor(p), t.toLowerCase().replace(/\\.js$/, ''))\n  || (/^continuous (integration|deployment)$/i.test(t) && hasWord(allowedFor(p), 'ci/cd'));\nfor (const [doc, text] of Object.entries(docs)) {\n  let carried = null;\n  for (const s of sentencesOf(text)) {\n    const lower = s.toLowerCase();\n    let named = profile.projects.map((p) => ({ p, at: lower.indexOf(p.name.toLowerCase()) })).filter((x) => x.at >= 0);\n    if (!named.length && carried && /^(it|this project|the project)\\b/i.test(s)) named = [{ p: carried, at: 0 }];\n    carried = named.length === 1 ? named[0].p : null;\n    if (!named.length || HEDGE_RE.test(s)) continue;\n    const extra = [];\n    for (const t of vocab) {\n      const m = s.match(termRe(t, CASE_SENSITIVE.has(t)));\n      if (!m) continue;\n      const at = m.index;\n      const before = named.filter((x) => x.at <= at).sort((x, y) => y.at - x.at);\n      const owner = (before[0] || named.slice().sort((x, y) => x.at - y.at)[0]).p;\n      if (!techAllowed(owner, t)) extra.push(`${t} → ${owner.name}`);\n    }\n    if (extra.length) add(doc, `project linked to tech not listed for it (${extra.join(', ')})`, s);\n  }\n}\n\n// 5-9. Invented years, seniority, availability, compensation, experience, authorization, language, education.\nconst availabilityText = String(profile.availability || '');\nconst allEnded = profile.experience.length > 0 && profile.experience.every((e) => e.end);\nconst internRole = profile.experience.some((e) => /intern/i.test(e.role));\nconst orgs = profile.experience.map((e) => e.organization).filter(Boolean);\nconst RULES = [\n  ['invented years of experience', /\\b\\d+\\s*\\+?\\s*(?:years?|yrs)\\b(?![- ]old)|\\byears of (?:hands-on |professional |industry )?experience\\b/i],\n  ['unsupported seniority claim', /\\bextensive (?:experience|work|background|knowledge|expertise)\\b|\\bproven (?:track record|ability|experience|history)\\b|\\bproduction[- ]grade\\b|\\bseasoned\\b|\\bexpert (?:in|at|level)\\b|\\bsignificant experience\\b/i],\n  ['invented availability', /\\b\\d+\\s*(?:hours?|hrs?|horas)\\b|\\b(?:\\d+|one|two|three|four|five|six|twelve)[- ]?months?\\b|\\bfull[- ]time\\b|\\bpart[- ]time\\b|\\b(?:start|join|begin|available|contribute)\\w*\\b[^.\\n]{0,40}\\b(?:immediately|right away|asap|from day one)\\b|\\bcan start\\b/i, true],\n  ['invented availability (date)', /\\b(?:January|February|March|April|June|July|August|September|October|November|December|[Oo]ctubre|[Nn]oviembre)\\b/, true],\n  ['invented compensation', /[$€£₹]\\s?\\d|\\b\\d+(?:\\.\\d+)?\\s?(?:k|lpa|lakhs?)\\b|\\bsalary expectations?\\b|\\bexpected (?:salary|ctc|compensation)\\b|\\bctc\\b/i],\n  ['work authorization claim', /\\b(?:visa|work permit|work authori[sz]ation|authori[sz]ed to work|right to work|citizenship)\\b/i],\n  ['language fluency claim', /\\b(?:fluent|fluency|native speaker|bilingual)\\b|\\bI (?:speak|write)\\b[^.\\n]{0,30}\\b(?:English|Spanish|German|French|Portuguese|Hindi)\\b/i],\n  ['unsupported degree claim', /\\b(?:my|currently pursuing an?|enrolled in an?|hold an?|have an?)\\s+(?:master'?s|m\\.?\\s?tech|m\\.?\\s?sc|ph\\.?\\s?d|mba)\\b/i],\n  ...(internRole ? [] : [['experience described as an internship', new RegExp(`\\\\b(?:internship|interning|intern)\\\\b[^.\\\\n]{0,40}\\\\b(?:${orgs.map(escRe).join('|') || 'x^'})\\\\b|\\\\b(?:${orgs.map(escRe).join('|') || 'x^'})\\\\b[^.\\\\n]{0,40}\\\\binternship\\\\b`, 'i')]]),\n  ...(allEnded ? [['ended role described as current', /\\b(?:my current (?:role|position|job)|in my current|currently (?:working|employed|serving|interning) (?:at|as|with)|current role (?:as|at))\\b/i]] : []),\n];\nfor (const [doc, text] of Object.entries(docs)) {\n  for (const s of sentencesOf(text)) {\n    for (const [what, re, firstPersonOnly] of RULES) {\n      const m = s.match(re);\n      if (!m) continue;\n      const hit = m[0].toLowerCase();\n      if (profileText.includes(hit) || availabilityText.toLowerCase().includes(hit)) continue;       // stated in the profile\n      if (what === 'invented compensation' && postingText.includes(hit)) continue;                     // restating the posting\n      if (what === 'unsupported degree claim' && HEDGE_RE.test(s)) continue;                           // \"not yet enrolled in a Master's\"\n      if (firstPersonOnly && !FIRST_PERSON_RE.test(s)) continue;\n      add(doc, what, s);\n    }\n  }\n  const grad = [...text.matchAll(/\\bgraduat\\w*\\s+(?:in\\s+)?(20\\d\\d)\\b/gi)].map((m) => m[1]).filter((y) => y !== String(profile.education.expectedGraduation));\n  if (grad.length) add(doc, 'graduation year differs from profile', grad.join(', '));\n}\n\n// 10. Answers the model could not ground: needs the user's input before sending.\nconst needsInput = [...new Set((generated.match(/NEEDS USER INPUT[^\\n]*|\\[FILL IN[^\\]]*\\]/g) || []).map((x) => x.trim().slice(0, 120)))];\nif (needsInput.length) issues.push(`needs user input: ${needsInput.join(' | ')}`);\n\nconst packageStatus = issues.length ? 'REVIEW_REQUIRED' : 'READY';\nreturn { json: {\n  rowId: row.id,\n  status: packageStatus === 'READY' ? row.status : 'REVIEW_REQUIRED',\n  packageStatus,\n  resume: prev.resumeMd,\n  coverLetter: prev.coverLetter,\n  answers: answersMd,\n  packageGeneratedAt: new Date().toISOString(),\n  notes: [\n    ...(packageStatus === 'REVIEW_REQUIRED' ? [`CHECK: PACKAGE STATUS: REVIEW_REQUIRED — not ready to apply (${issues.length} issue(s) below)`] : []),\n    ...[...new Set(issues)].slice(0, 25).map((i) => 'CHECK: ' + i),\n    ...warnings.map((w) => 'CHECK: ' + w),\n    ...errors.map((e) => 'GENERATION ERROR: ' + e),\n  ].join('\\n'),\n} };\n"
+      },
+      "id": "26b61d18-adad-5b46-8249-aa31f710a5d1",
+      "name": "Assemble Package",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5152,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "job_hunt_jobs"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyValue": "={{ $json.rowId }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "resume": "={{ $json.resume }}",
+            "coverLetter": "={{ $json.coverLetter }}",
+            "answers": "={{ $json.answers }}",
+            "packageGeneratedAt": "={{ $json.packageGeneratedAt }}",
+            "notes": "={{ $json.notes }}",
+            "status": "={{ $json.status }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "jobKey",
+              "displayName": "jobKey",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "company",
+              "displayName": "company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "location",
+              "displayName": "location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "remote",
+              "displayName": "remote",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "remoteRegions",
+              "displayName": "remoteRegions",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "employmentType",
+              "displayName": "employmentType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "seniority",
+              "displayName": "seniority",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "sources",
+              "displayName": "sources",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "sourceUrl",
+              "displayName": "sourceUrl",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "applicationUrl",
+              "displayName": "applicationUrl",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "postedAt",
+              "displayName": "postedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "discoveredAt",
+              "displayName": "discoveredAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "salaryRaw",
+              "displayName": "salaryRaw",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "salaryMin",
+              "displayName": "salaryMin",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "salaryMax",
+              "displayName": "salaryMax",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "salaryCurrency",
+              "displayName": "salaryCurrency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "salaryPeriod",
+              "displayName": "salaryPeriod",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "salaryDisclosed",
+              "displayName": "salaryDisclosed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "salaryNote",
+              "displayName": "salaryNote",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "matchScore",
+              "displayName": "matchScore",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "matchLevel",
+              "displayName": "matchLevel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "recommendation",
+              "displayName": "recommendation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "scoreBreakdown",
+              "displayName": "scoreBreakdown",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "why",
+              "displayName": "why",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "matchingSkills",
+              "displayName": "matchingSkills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "missingSkills",
+              "displayName": "missingSkills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "experienceGap",
+              "displayName": "experienceGap",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "experienceRequired",
+              "displayName": "experienceRequired",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "languageRequirement",
+              "displayName": "languageRequirement",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "description",
+              "displayName": "description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "resume",
+              "displayName": "resume",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "coverLetter",
+              "displayName": "coverLetter",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "answers",
+              "displayName": "answers",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "packageGeneratedAt",
+              "displayName": "packageGeneratedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "statusUpdatedAt",
+              "displayName": "statusUpdatedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "2e50fe0d-a9ba-5fce-8aed-1253b81223ec",
+      "name": "Save Package",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        5376,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One Discord message per READY package (+ a header). Returns [] when no webhook is set.\n// Packages that failed validation (status REVIEW_REQUIRED) are only counted, never announced as ready.\nconst { config } = $('Config & Profile').first().json;\nconst packaged = $input.all().map((i) => i.json).sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));\nconst rows = packaged.filter((r) => r.status !== 'REVIEW_REQUIRED');\nconst packagesNeedingReview = packaged.length - rows.length;\nconst shortlistedTotal = $('Store Job').all().filter((i) => i.json.status === 'SHORTLISTED').length;\nconst analysesNeedingReview = $('Store Job').all().filter((i) => i.json.status === 'REVIEW_REQUIRED').length;\nconst analyzedTotal = $('Store Job').all().length;\nif (!config.discord?.jobsWebhookUrl || packaged.length === 0) return [];\nconst reviewNote = packagesNeedingReview || analysesNeedingReview\n  ? ` ${packagesNeedingReview + analysesNeedingReview} job(s) need review in the Tracker (status REVIEW_REQUIRED) — not ready to apply.` : '';\n\nconst bullets = (s, n) => String(s || '').split('\\n').filter(Boolean).slice(0, n).map((x) => `• ${x}`).join('\\n') || '• —';\nconst remoteLabel = (r) => (r === true ? 'Yes' : r === false ? 'No' : 'Unknown');\nconst msgs = [{\n  username: 'Job Hunt Agent',\n  content: `**${rows.length} new application package(s) ready** (analyzed ${analyzedTotal}, shortlisted ${shortlistedTotal}).${reviewNote} Tracker: ${config.trackerBaseUrl}`,\n}];\nfor (const r of rows) {\n  const apply = r.applicationUrl\n    ? `Application: ${r.applicationUrl}`\n    : `Application: no direct apply link found — open the listing: ${r.sourceUrl}`;\n  const text = [\n    `**${r.title}**`,\n    `Company: ${r.company || 'Unknown'}`,\n    '',\n    `Compensation: ${r.salaryRaw || 'Not disclosed'}`,\n    `Location: ${r.location || 'Unknown'}`,\n    `Remote: ${remoteLabel(r.remote)}`,\n    '',\n    `Match: ${r.matchScore} (${r.matchLevel}, recommendation: ${r.recommendation})`,\n    '',\n    'Why:', bullets(r.why, 4),\n    '',\n    'Gaps:', bullets([r.missingSkills, r.experienceGap, r.languageRequirement].filter(Boolean).join('\\n'), 5),\n    '',\n    apply,\n    `Source: ${JSON.parse(r.sources || '[]').map((s) => s.source).join(', ') || r.source} — ${r.sourceUrl}`,\n    `Resume / cover letter / answers: ${config.trackerBaseUrl}/job?id=${r.id}`,\n    r.notes ? `\\n⚠️ ${r.notes.split('\\n')[0]}` : '',\n  ].join('\\n');\n  msgs.push({ username: 'Job Hunt Agent', content: text.slice(0, 1990) });\n}\nreturn msgs.map((payload) => ({ json: { payload } }));\n"
+      },
+      "id": "d664cc7d-1c7f-596b-ade1-75492c7f9c38",
+      "name": "Prepare Job Notifications",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5600,
+        592
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config & Profile').first().json.config.discord.jobsWebhookUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1500
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "811ec054-55f2-553c-80c8-1194d0fe66f9",
+      "name": "Send Jobs to Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5824,
+        592
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "## Job Hunt Agent v2\nSources → Normalize → Merge → Deduplicate → Basic filter → Skip already-seen → **Qwen3 4B** analysis → Store → Shortlist → Resume / Cover letter / Answers → Save → Notify.\n\n**Edit settings + your profile in `Config & Profile`.** Only real facts; `[PLACEHOLDERS]` stay visible in generated docs.\n\n- Data: n8n **Data tables** `job_hunt_jobs` (jobs, status, documents) and `job_hunt_runs` (source health, failures).\n- Each source is isolated: retries 3×, continues on error, failure is logged and reported; other sources keep going.\n- Notifications: paste a Discord webhook URL in config (optional).\n- Tracker UI: publish **Job Hunt Agent v2 - Tracker**, then open http://localhost:5678/webhook/job-hunt\n- **Never applies to jobs.** You review and apply manually, then update status in the tracker.",
+        "height": 330,
+        "width": 900,
+        "color": 4
+      },
+      "id": "81db7a6c-205b-56dd-93ff-72fb29cdb6c4",
+      "name": "README",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -48,
+        -304
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## ➕ Adding a job source (Fetch → Normalize → Merge)\nEvery source is an isolated pair. To add a **new source type**:\n1. **Fetch <Name> Jobs** – HTTP Request from `Ensure Runs Table`. Settings → *Retry On Fail* and *On Error: Continue (regular output)*. Timeout 30s.\n2. **Normalize <Name>** – Code node. Copy an existing Normalize node, change `SOURCE` and the field mapping. It must never throw: failures become `{_kind:'sourceError'}` items. On Error: Continue.\n3. **Merge Job Sources** – raise *Number of Inputs* by 1 and connect the new Normalize node to it.\n4. **Source Health Report** – set the source's `state` to `'active'` in `SOURCE_REGISTRY`.\nMapper output per job: `source, sourceId, title, company, descriptionHtml, location, remote, employmentType, salaryText, salaryStructured, sourceUrl, applicationUrl, postedAt, updatedAt, tags, remoteRegions, categoryTrusted`.\n\n### Company boards (ACTIVE: Greenhouse, Lever)\n**Add a company = add one line** to `Config & Profile → config.atsBoards` — no new nodes. Verify first that the board returns current jobs:\n- Greenhouse `https://boards-api.greenhouse.io/v1/boards/{board}/jobs`\n- Lever `https://api.lever.co/v0/postings/{board}?mode=json`\nOne failing board is logged and reported; the other boards and sources continue.\nNext candidates: Ashby `https://api.ashbyhq.com/posting-api/job-board/{board}` (NOT CONFIGURED), SmartRecruiters `https://api.smartrecruiters.com/v1/companies/{id}/postings` (not added).\n\n### LinkedIn – planned, NOT implemented\nOnly via a permitted LinkedIn API you are authorized to use. **No scraping, no login/CAPTCHA bypass, no browser automation, no unofficial APIs.** It would plug in like the others: `Fetch LinkedIn Jobs → Normalize LinkedIn → next Merge input`. Same for Naukri, Internshala, Indeed, Glassdoor, Unstop, Cutshort, Wellfound, Instahyre. Status: **NOT AVAILABLE** (never counted as failures).",
+        "height": 760,
+        "width": 760,
+        "color": 7
+      },
+      "id": "bd368949-ca6b-5d2e-b060-c1a89e4268fa",
+      "name": "Adding Job Sources",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        640,
+        1360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item per configured board -> one HTTP request each (1 s apart).\n// Boards live in Config & Profile -> config.atsBoards.greenhouse ; verify a board before adding it.\nconst { config } = $('Config & Profile').first().json;\nconst boards = ((config.atsBoards || {}).greenhouse || []).filter((b) => b && b.board);\nif (!boards.length) return [{ json: { notConfigured: true, url: '' } }]; // reported as NOT CONFIGURED\nreturn boards.map((b) => ({ json: { board: String(b.board), company: String(b.company || b.board), url: `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(b.board)}/jobs?content=true&pay_transparency=true` } }));\n"
+      },
+      "name": "List Greenhouse Boards",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        880
+      ],
+      "id": "1d787369-1438-5c04-9ad4-61ce4b0cec0a"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "JobHuntAgent/2.0 (personal, non-commercial; runs once a day)"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "name": "Fetch Greenhouse Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        880
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "id": "3cb6e732-63bf-50a7-b924-ff82a6605195",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const SOURCE = 'greenhouse';\nconst LIST_NODE = 'List Greenhouse Boards';\n// Company job boards via a PUBLIC ATS API (no login). One HTTP item per board.\n// FAULT ISOLATION: never throws. A failing board becomes one `sourceError` item\n// (tagged with the board) and every other board and source keeps going.\nconst str = (v) => (v === undefined || v === null ? '' : String(v));\nconst errMsg = (r) => {\n  const e = r && r.error;\n  if (!e) return 'Malformed response (expected job list not found)';\n  if (typeof e === 'string') return e;\n  const code = e.httpCode || e.status || e.statusCode || (e.cause && e.cause.status);\n  let msg = String(e.message || e.description || JSON.stringify(e));\n  if (/<!doctype|<html/i.test(msg)) msg = msg.replace(/\\s*-?\\s*\"?<!doctype[\\s\\S]*$|\\s*-?\\s*\"?<html[\\s\\S]*$/i, '').trim() || 'HTML error page';\n  msg = msg.split('\\n')[0].replace(/^\\d{3}\\s*-?\\s*/, '').slice(0, 160) || 'error';\n  const kind = code ? '' : /timeout|ETIMEDOUT|ECONNABORTED/i.test(msg) ? 'timeout: ' : /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|network/i.test(msg) ? 'network error: ' : '';\n  return `${code ? 'HTTP ' + code + ' ' : ''}${kind}${msg}`.trim();\n};\nconst boardError = (b, message) => ({ json: { _kind: 'sourceError', source: SOURCE, board: str(b.board), message: `${b.company || b.board || 'unknown board'}: ${String(message).slice(0, 300)}` } });\n// Which configured board produced this HTTP item (order + pairedItem are preserved by the HTTP node)\nconst boards = $(LIST_NODE).all().map((i) => i.json);\nconst boardFor = (item, i) => {\n  const p = item.pairedItem;\n  const idx = Array.isArray(p) ? p[0] && p[0].item : p && typeof p === 'object' ? p.item : p;\n  return boards[Number.isInteger(idx) ? idx : i] || {};\n};\nif (boards.length === 1 && boards[0].notConfigured) {\n  return [{ json: { _kind: 'sourceNotConfigured', source: SOURCE, message: 'no boards in config.atsBoards' } }];\n}\nconst out = [];\n// Greenhouse Job Board API: GET boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true&pay_transparency=true\nconst decodeEntities = (s) => str(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '\"').replace(/&#39;/g, \"'\").replace(/&amp;/g, '&');\n$input.all().forEach((item, i) => {\n  const b = boardFor(item, i);\n  try {\n    const r = item.json;\n    if (r.error || !Array.isArray(r.jobs)) { out.push(boardError(b, errMsg(r))); return; }\n    for (const j of r.jobs) {\n      const locName = str(j.location && j.location.name) ||\n        (Array.isArray(j.offices) ? j.offices.map((o) => o.location || o.name).filter(Boolean).join('; ') : '');\n      const isRemote = /remote/i.test(locName) ? true : locName ? false : null;\n      const meta = Array.isArray(j.metadata) ? j.metadata : [];\n      const empType = meta.find((m) => /employment|job type|commitment|contract type/i.test(str(m.name)));\n      // Employer-published pay range (pay transparency). Kept as text WITH its label,\n      // e.g. \"(United States Salary Range)\", so a region-specific range is never mistaken for India pay.\n      const ranges = Array.isArray(j.pay_input_ranges) ? j.pay_input_ranges : [];\n      const pr = ranges.find((p) => /india/i.test(str(p.title))) || ranges[0];\n      const money = (c) => (c === null || c === undefined ? '' : Math.round(Number(c) / 100).toLocaleString('en-US'));\n      const salaryText = pr && (pr.min_cents != null || pr.max_cents != null)\n        ? `${str(pr.currency_type)} ${[money(pr.min_cents), money(pr.max_cents)].filter(Boolean).join(' - ')}${pr.title ? ' (' + str(pr.title) + ')' : ''}`.trim()\n        : '';\n      out.push({ json: {\n        _kind: 'job', source: SOURCE,\n        sourceId: `${b.board}:${j.id}`,\n        title: str(j.title),\n        company: b.company || str(j.company_name),\n        descriptionHtml: decodeEntities(j.content), // Greenhouse returns entity-encoded HTML\n        location: locName,\n        remote: isRemote,\n        employmentType: empType ? str(empType.value) : '',\n        salaryText,\n        salaryStructured: null,\n        sourceUrl: str(j.absolute_url),\n        applicationUrl: str(j.absolute_url), // direct company posting with the application form\n        postedAt: str(j.first_published || j.updated_at),\n        updatedAt: str(j.updated_at),\n        tags: [...(Array.isArray(j.departments) ? j.departments.map((d) => str(d.name)) : []), 'ATS: Greenhouse', `board: ${b.board}`].filter(Boolean),\n        remoteRegions: isRemote ? locName.replace(/\\bremote\\b[\\s,\\-–:]*/i, '').trim() : '',\n        categoryTrusted: false, // boards list every department -> needs a software keyword\n      } });\n    }\n  } catch (e) {\n    out.push(boardError(b, 'Parsing error: ' + (e && e.message ? e.message : e)));\n  }\n});\nif (out.length === 0) out.push({ json: { _kind: 'sourceError', source: SOURCE, board: '', message: 'Empty response (0 jobs on all boards)' } });\nreturn out;\n"
+      },
+      "name": "Normalize Greenhouse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        880
+      ],
+      "id": "9b1bff68-921f-5ce0-9f46-f346fa72ce91",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item per configured board -> one HTTP request each (1 s apart).\n// Boards live in Config & Profile -> config.atsBoards.lever ; verify a board before adding it.\nconst { config } = $('Config & Profile').first().json;\nconst boards = ((config.atsBoards || {}).lever || []).filter((b) => b && b.board);\nif (!boards.length) return [{ json: { notConfigured: true, url: '' } }]; // reported as NOT CONFIGURED\nreturn boards.map((b) => ({ json: { board: String(b.board), company: String(b.company || b.board), url: `https://api.lever.co/v0/postings/${encodeURIComponent(b.board)}?mode=json` } }));\n"
+      },
+      "name": "List Lever Boards",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        1072
+      ],
+      "id": "df975705-01a2-53f6-8916-9d72593b71fe"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "JobHuntAgent/2.0 (personal, non-commercial; runs once a day)"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "name": "Fetch Lever Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        1072
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "id": "53b56502-6196-5f84-baa0-6ea61416d6cf",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const SOURCE = 'lever';\nconst LIST_NODE = 'List Lever Boards';\n// Company job boards via a PUBLIC ATS API (no login). One HTTP item per board.\n// FAULT ISOLATION: never throws. A failing board becomes one `sourceError` item\n// (tagged with the board) and every other board and source keeps going.\nconst str = (v) => (v === undefined || v === null ? '' : String(v));\nconst errMsg = (r) => {\n  const e = r && r.error;\n  if (!e) return 'Malformed response (expected job list not found)';\n  if (typeof e === 'string') return e;\n  const code = e.httpCode || e.status || e.statusCode || (e.cause && e.cause.status);\n  let msg = String(e.message || e.description || JSON.stringify(e));\n  if (/<!doctype|<html/i.test(msg)) msg = msg.replace(/\\s*-?\\s*\"?<!doctype[\\s\\S]*$|\\s*-?\\s*\"?<html[\\s\\S]*$/i, '').trim() || 'HTML error page';\n  msg = msg.split('\\n')[0].replace(/^\\d{3}\\s*-?\\s*/, '').slice(0, 160) || 'error';\n  const kind = code ? '' : /timeout|ETIMEDOUT|ECONNABORTED/i.test(msg) ? 'timeout: ' : /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|network/i.test(msg) ? 'network error: ' : '';\n  return `${code ? 'HTTP ' + code + ' ' : ''}${kind}${msg}`.trim();\n};\nconst boardError = (b, message) => ({ json: { _kind: 'sourceError', source: SOURCE, board: str(b.board), message: `${b.company || b.board || 'unknown board'}: ${String(message).slice(0, 300)}` } });\n// Which configured board produced this HTTP item (order + pairedItem are preserved by the HTTP node)\nconst boards = $(LIST_NODE).all().map((i) => i.json);\nconst boardFor = (item, i) => {\n  const p = item.pairedItem;\n  const idx = Array.isArray(p) ? p[0] && p[0].item : p && typeof p === 'object' ? p.item : p;\n  return boards[Number.isInteger(idx) ? idx : i] || {};\n};\nif (boards.length === 1 && boards[0].notConfigured) {\n  return [{ json: { _kind: 'sourceNotConfigured', source: SOURCE, message: 'no boards in config.atsBoards' } }];\n}\nconst out = [];\n// Lever Postings API: GET api.lever.co/v0/postings/{board}?mode=json\n// The HTTP node fetches it as TEXT so each board stays one item; parsed here.\nconst PERIOD = { 'per-year-salary': 'year', 'per-month-salary': 'month', 'per-week-salary': 'week', 'per-day-wage': 'day', 'per-hour-wage': 'hour' };\nconst COUNTRY = { IN: 'India', US: 'United States', GB: 'United Kingdom', SG: 'Singapore', AE: 'United Arab Emirates', DE: 'Germany' };\n$input.all().forEach((item, i) => {\n  const b = boardFor(item, i);\n  try {\n    const r = item.json;\n    if (r.error) { out.push(boardError(b, errMsg(r))); return; }\n    let arr;\n    try { arr = typeof r.data === 'string' ? JSON.parse(r.data) : r.data; } catch { out.push(boardError(b, 'Malformed JSON')); return; }\n    if (!Array.isArray(arr)) { out.push(boardError(b, (arr && (arr.error || arr.message)) || 'Malformed response (expected job list)')); return; }\n    for (const p of arr) {\n      const c = p.categories || {};\n      const loc = str(c.location) || (Array.isArray(c.allLocations) ? c.allLocations.join('; ') : '');\n      const country = COUNTRY[p.country] || str(p.country);\n      const location = loc && country && !loc.toLowerCase().includes(country.toLowerCase()) ? `${loc}, ${country}` : loc || country;\n      const wt = str(p.workplaceType);\n      const isRemote = wt === 'remote' ? true : wt === 'onsite' || wt === 'hybrid' ? false : /remote/i.test(loc) ? true : null;\n      const sr = p.salaryRange;\n      out.push({ json: {\n        _kind: 'job', source: SOURCE,\n        sourceId: `${b.board}:${p.id}`,\n        title: str(p.text),\n        company: b.company || b.board,\n        descriptionHtml: [\n          p.description || p.descriptionBody || p.opening,\n          ...(Array.isArray(p.lists) ? p.lists.map((l) => `<h3>${str(l.text)}</h3><ul>${str(l.content)}</ul>`) : []),\n          p.additional,\n        ].filter(Boolean).join('\\n'),\n        location,\n        remote: isRemote,\n        employmentType: [str(c.commitment), wt && wt !== 'unspecified' ? wt : ''].filter(Boolean).join(', '),\n        // Only employer-published pay; nothing is inferred\n        salaryText: sr ? '' : str(p.salaryDescriptionPlain || ''),\n        salaryStructured: sr && (sr.min != null || sr.max != null)\n          ? { min: sr.min != null ? Number(sr.min) : null, max: sr.max != null ? Number(sr.max) : null, currency: str(sr.currency), period: PERIOD[sr.interval] || '' }\n          : null,\n        sourceUrl: str(p.hostedUrl),\n        applicationUrl: str(p.applyUrl || p.hostedUrl), // direct Lever application form\n        postedAt: p.createdAt ? new Date(p.createdAt).toISOString() : '',\n        updatedAt: p.updatedAt ? new Date(p.updatedAt).toISOString() : '',\n        tags: [str(c.team), str(c.department), 'ATS: Lever', `board: ${b.board}`].filter(Boolean),\n        remoteRegions: isRemote ? location : '',\n        categoryTrusted: false,\n      } });\n    }\n  } catch (e) {\n    out.push(boardError(b, 'Parsing error: ' + (e && e.message ? e.message : e)));\n  }\n});\nif (out.length === 0) out.push({ json: { _kind: 'sourceError', source: SOURCE, board: '', message: 'Empty response (0 jobs on all boards)' } });\nreturn out;\n"
+      },
+      "name": "Normalize Lever",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        1072
+      ],
+      "id": "9fbe7e81-04bc-5106-b86a-f1b0881fcbb9",
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Ensure Runs Table": {
+      "main": [
+        [
+          {
+            "node": "Fetch Arbeitnow Jobs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Remotive Jobs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Jobicy Jobs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch The Muse Jobs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "List Greenhouse Boards",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "List Lever Boards",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Arbeitnow Jobs": {
+      "main": [
+        [
+          {
+            "node": "Normalize Arbeitnow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Arbeitnow": {
+      "main": [
+        [
+          {
+            "node": "Merge Job Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Remotive Jobs": {
+      "main": [
+        [
+          {
+            "node": "Normalize Remotive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Remotive": {
+      "main": [
+        [
+          {
+            "node": "Merge Job Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Fetch Jobicy Jobs": {
+      "main": [
+        [
+          {
+            "node": "Normalize Jobicy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Jobicy": {
+      "main": [
+        [
+          {
+            "node": "Merge Job Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Fetch The Muse Jobs": {
+      "main": [
+        [
+          {
+            "node": "Normalize The Muse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize The Muse": {
+      "main": [
+        [
+          {
+            "node": "Merge Job Sources",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config & Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config & Profile": {
+      "main": [
+        [
+          {
+            "node": "Ensure Jobs Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Jobs Table": {
+      "main": [
+        [
+          {
+            "node": "Ensure Runs Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Job Sources": {
+      "main": [
+        [
+          {
+            "node": "Source Health Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Normalize & Deduplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Source Health Report": {
+      "main": [
+        [
+          {
+            "node": "Log Run Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Run Health": {
+      "main": [
+        [
+          {
+            "node": "Prepare Health Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Health Notification": {
+      "main": [
+        [
+          {
+            "node": "Send Health to Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Deduplicate": {
+      "main": [
+        [
+          {
+            "node": "Basic Relevance Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic Relevance Filter": {
+      "main": [
+        [
+          {
+            "node": "Skip Already Seen Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Already Seen Jobs": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Analysis": {
+      "main": [
+        [
+          {
+            "node": "Analyze Job with Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Job with Gemini": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate Analysis": {
+      "main": [
+        [
+          {
+            "node": "Build Job Record",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Failure Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Failure Log": {
+      "main": [
+        [
+          {
+            "node": "Log Analysis Failures",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Job Record": {
+      "main": [
+        [
+          {
+            "node": "Store Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Job": {
+      "main": [
+        [
+          {
+            "node": "Select Shortlist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Shortlist": {
+      "main": [
+        [
+          {
+            "node": "Prepare Resume Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Resume Prompt": {
+      "main": [
+        [
+          {
+            "node": "Generate Tailored Resume with Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Tailored Resume with Gemini": {
+      "main": [
+        [
+          {
+            "node": "Prepare Cover Letter Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Cover Letter Prompt": {
+      "main": [
+        [
+          {
+            "node": "Generate Cover Letter with Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Cover Letter with Gemini": {
+      "main": [
+        [
+          {
+            "node": "Prepare Answers Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Answers Prompt": {
+      "main": [
+        [
+          {
+            "node": "Generate Application Answers with Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Application Answers with Gemini": {
+      "main": [
+        [
+          {
+            "node": "Assemble Package",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Package": {
+      "main": [
+        [
+          {
+            "node": "Save Package",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Package": {
+      "main": [
+        [
+          {
+            "node": "Prepare Job Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Job Notifications": {
+      "main": [
+        [
+          {
+            "node": "Send Jobs to Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Greenhouse Boards": {
+      "main": [
+        [
+          {
+            "node": "Fetch Greenhouse Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Greenhouse Jobs": {
+      "main": [
+        [
+          {
+            "node": "Normalize Greenhouse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Greenhouse": {
+      "main": [
+        [
+          {
+            "node": "Merge Job Sources",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "List Lever Boards": {
+      "main": [
+        [
+          {
+            "node": "Fetch Lever Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Lever Jobs": {
+      "main": [
+        [
+          {
+            "node": "Normalize Lever",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Lever": {
+      "main": [
+        [
+          {
+            "node": "Merge Job Sources",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "Daily 9:00": {
+      "main": [
+        [
+          {
+            "node": "Config & Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "tags": [],
+  "active": false,
+  "pinData": {}
+}

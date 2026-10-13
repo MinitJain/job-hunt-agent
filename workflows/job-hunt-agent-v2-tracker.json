@@ -1,0 +1,411 @@
+{
+  "name": "Job Hunt Agent v2 - Tracker",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "job-hunt",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "ecc07a1d-c1da-5c96-bf0b-6ad811a57247",
+      "name": "List Jobs Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "cd04cec0-2cff-53cc-a12b-5e540c665bba"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "job_hunt_jobs"
+        },
+        "returnAll": true
+      },
+      "id": "b2f5a697-fb81-586f-9c66-43c3cd62a26e",
+      "name": "Get All Jobs",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        224,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Renders all stored jobs as an HTML table. ?status=SHORTLISTED filters.\nconst base = 'http://localhost:5678/webhook/job-hunt';\nconst wanted = String($('List Jobs Webhook').first().json.query?.status || '').toUpperCase();\nconst esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\n// Rows discovered before the last Config & Profile update were analyzed against an older profile.\n// Update this timestamp whenever the profile changes. Display only: stored rows are never modified.\nconst PROFILE_UPDATED_AT = '2026-09-29T21:08:30Z';\nconst isHistorical = (r) => Date.parse(r.discoveredAt || r.createdAt) < Date.parse(PROFILE_UPDATED_AT);\nconst STATUSES = ['DISCOVERED', 'ANALYZED', 'SHORTLISTED', 'REVIEW_REQUIRED', 'APPLIED', 'REJECTED', 'INTERVIEW', 'OFFER', 'IGNORED'];\nconst rows = $input.all().map((i) => i.json).filter((r) => r.jobKey && (!wanted || r.status === wanted))\n  .sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));\nconst tabs = ['ALL', ...STATUSES].map((s) => `<a class=\"${(s === 'ALL' ? !wanted : wanted === s) ? 'on' : ''}\" href=\"${base}${s === 'ALL' ? '' : '?status=' + s}\">${s}</a>`).join('');\nconst trs = rows.map((r) => `<tr>\n  <td><b>${esc(r.matchScore)}</b>${isHistorical(r) ? '<div class=\"m\">historical</div>' : ''}</td>\n  <td><a href=\"${base}/job?id=${r.id}\">${esc(r.title)}</a><div class=\"m\">${esc(r.company)}</div></td>\n  <td>${esc(r.location)}${r.remote ? ' · remote' : ''}</td>\n  <td>${esc(r.salaryRaw)}</td>\n  <td><span class=\"s s-${esc(r.status)}\">${esc(r.status)}</span></td>\n  <td>${esc(r.source)}</td>\n  <td>${esc(String(r.discoveredAt || '').slice(0, 10))}</td></tr>`).join('');\nconst html = `<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Job Tracker</title>\n<style>body{font:14px system-ui;margin:24px;background:#fafafa;color:#222}table{border-collapse:collapse;width:100%;background:#fff}td,th{padding:8px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}\n.m{color:#777;font-size:12px}.tabs a{margin-right:8px;padding:4px 8px;border-radius:6px;text-decoration:none;color:#333;background:#eee;font-size:12px}.tabs a.on{background:#333;color:#fff}\n.s{font-size:11px;padding:2px 6px;border-radius:4px;background:#eee}.s-SHORTLISTED{background:#dbeafe}.s-REVIEW_REQUIRED{background:#fed7aa}.s-APPLIED{background:#fef3c7}.s-INTERVIEW,.s-OFFER{background:#dcfce7}.s-REJECTED,.s-IGNORED{background:#f3f4f6;color:#888}\n@media(prefers-color-scheme:dark){body{background:#111;color:#ddd}table{background:#1a1a1a}td,th{border-color:#2a2a2a}.tabs a,.s{background:#2a2a2a;color:#ddd}a{color:#8ab4f8}}</style></head>\n<body><h2>Job Hunt Agent v2 — Tracker</h2><div class=\"tabs\">${tabs}</div><p class=\"m\">${rows.length} job(s)</p>\n<table><tr><th>Match</th><th>Role</th><th>Location</th><th>Compensation</th><th>Status</th><th>Source</th><th>Found</th></tr>${trs}</table></body></html>`;\nreturn [{ json: { html } }];\n"
+      },
+      "id": "7e7f3078-288c-5a81-9c45-638bb8221f5e",
+      "name": "Render Job List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "9e8ce038-fbeb-516c-9492-b13d14c63139",
+      "name": "Respond Job List",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "path": "job-hunt/job",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "8b3bd71f-1a7d-5125-bc02-4afeb9965132",
+      "name": "Job Detail Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        256
+      ],
+      "webhookId": "548d8188-8b98-5131-aa9a-4fb59123cb3e"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "job_hunt_jobs"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyValue": "={{ $json.query.id }}"
+            }
+          ]
+        },
+        "limit": 1
+      },
+      "id": "03c4bca1-368d-576d-a35f-3e388b62b21e",
+      "name": "Get Job",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        224,
+        256
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Renders one job with its generated package and a status/notes form.\nconst base = 'http://localhost:5678/webhook/job-hunt';\nconst r = $input.first()?.json || {};\nconst esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\nif (!r.jobKey) return [{ json: { html: `<p>Job not found. <a href=\"${base}\">Back</a></p>` } }];\n// Rows discovered before the last Config & Profile update were analyzed against an older profile.\n// Update this timestamp whenever the profile changes. Display only: stored rows are never modified.\nconst PROFILE_UPDATED_AT = '2026-09-29T21:08:30Z';\nconst isHistorical = (r) => Date.parse(r.discoveredAt || r.createdAt) < Date.parse(PROFILE_UPDATED_AT);\nconst historical = isHistorical(r);\nconst STATUSES = ['DISCOVERED', 'ANALYZED', 'SHORTLISTED', 'REVIEW_REQUIRED', 'APPLIED', 'REJECTED', 'INTERVIEW', 'OFFER', 'IGNORED'];\nconst list = (s) => String(s || '').split('\\n').filter(Boolean).map((x) => `<li>${esc(x)}</li>`).join('') || '<li>—</li>';\nconst block = (title, text) => `<h3>${title}</h3>${text ? `<button onclick=\"navigator.clipboard.writeText(this.nextElementSibling.innerText)\">Copy</button><pre>${esc(text)}</pre>` : '<p class=\"m\">Not generated (only the top shortlisted jobs per run get a package).</p>'}`;\nconst html = `<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>${esc(r.title)}</title>\n<style>body{font:14px system-ui;margin:24px;max-width:900px;background:#fafafa;color:#222}pre{white-space:pre-wrap;background:#fff;border:1px solid #eee;padding:12px;border-radius:6px}.m{color:#777}\n.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:700px){.grid{grid-template-columns:1fr}}.warn{background:#fff7ed;border:1px solid #fed7aa;padding:8px;border-radius:6px;white-space:pre-wrap}\n@media(prefers-color-scheme:dark){body{background:#111;color:#ddd}pre{background:#1a1a1a;border-color:#2a2a2a}.warn{background:#3a2a10;border-color:#7a5a20}a{color:#8ab4f8}}</style></head><body>\n<p><a href=\"${base}\">← all jobs</a></p>\n<h2>${esc(r.title)}</h2><p><b>${esc(r.company)}</b> · ${esc(r.location)} · Remote: ${r.remote === true ? 'yes' : r.remote === false ? 'no' : 'unknown'} · ${esc(r.employmentType)}</p>\n<p>Compensation: <b>${esc(r.salaryRaw)}</b> <span class=\"m\">(${esc(r.salaryNote)})</span></p>\n${historical ? '<p class=\"warn\"><b>Historical analysis — generated with an older candidate profile. Match score and reasoning may be outdated.</b></p>' : ''}<p>Match: <b>${esc(r.matchScore)}</b> (${esc(r.matchLevel)}, ${esc(r.recommendation)}, confidence ${esc(r.confidence)}) <span class=\"m\">${esc(r.scoreBreakdown)}</span></p>\n<p>${r.applicationUrl ? `Apply: <a href=\"${esc(r.applicationUrl)}\" target=\"_blank\">${esc(r.applicationUrl)}</a><br>` : '<span class=\"m\">No direct application link found in the posting.</span><br>'}Listing: <a href=\"${esc(r.sourceUrl)}\" target=\"_blank\">${esc(r.sourceUrl)}</a></p>\n<form action=\"${base}/status\" method=\"get\"><input type=\"hidden\" name=\"id\" value=\"${r.id}\">${r.status === 'REVIEW_REQUIRED' ? `<input type=\"hidden\" name=\"system\" value=\"${esc(String(r.notes || '').split('\\n').filter((n) => /^(CHECK|GENERATION ERROR):/.test(n)).join('\\n')).replace(/\\n/g, '&#10;')}\">` : ''}\nStatus: <select name=\"status\">${STATUSES.map((s) => `<option ${s === r.status ? 'selected' : ''}>${s}</option>`).join('')}</select>\n<input name=\"notes\" size=\"50\" placeholder=\"notes\" value=\"${esc(String(r.notes || '').split('\\n').filter((n) => !/^(CHECK|GENERATION ERROR):/.test(n)).join(' '))}\"> <button>Save</button></form>\n${historical ? '<details><summary><b>Historical AI output (older candidate profile)</b> — Why, Gaps, Matching skills, resume, cover letter, answers</summary>' : ''}${r.notes && /CHECK:|GENERATION ERROR/.test(r.notes) ? `<p class=\"warn\">${esc(r.notes)}</p>` : ''}\n<div class=\"grid\"><div><h3>Why</h3><ul>${list(r.why)}</ul><h3>Matching skills</h3><ul>${list(r.matchingSkills)}</ul></div>\n<div><h3>Gaps</h3><ul>${list(r.missingSkills)}${list(r.experienceGap)}</ul>${r.languageRequirement ? `<p>Language: ${esc(r.languageRequirement)}</p>` : ''}</div></div>\n${block('Tailored resume (Markdown)', r.resume)}${block('Cover letter', r.coverLetter)}${block('Application answers', r.answers)}${historical ? '</details>' : ''}\n<details><summary>Job description</summary><pre>${esc(r.description)}</pre></details>\n<p class=\"m\">You apply manually. Nothing is ever submitted automatically.</p></body></html>`;\nreturn [{ json: { html } }];\n"
+      },
+      "id": "0c49640e-acf6-5263-a553-47b340a322da",
+      "name": "Render Job Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "e770390c-aea1-50d8-9fbe-4450f53b1556",
+      "name": "Respond Job Page",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "path": "job-hunt/status",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "83de04ce-b78a-5933-89f3-83fd3c574665",
+      "name": "Update Status Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        512
+      ],
+      "webhookId": "20ffd4ab-ddfc-52e1-9213-0cb1c6865ed4"
+    },
+    {
+      "parameters": {
+        "jsCode": "const q = $('Update Status Webhook').first().json.query || {};\nconst STATUSES = ['DISCOVERED', 'ANALYZED', 'SHORTLISTED', 'REVIEW_REQUIRED', 'APPLIED', 'REJECTED', 'INTERVIEW', 'OFFER', 'IGNORED'];\nconst status = String(q.status || '').toUpperCase();\nconst id = Number(q.id);\nif (!STATUSES.includes(status) || !Number.isInteger(id)) throw new Error(`Invalid status update (id=${q.id}, status=${q.status})`);\n// REVIEW_REQUIRED keeps its system-written review reasons (CHECK: / GENERATION ERROR: lines, carried in the page's\n// hidden \"system\" field) across manual saves. Every other status saves exactly as before.\nconst systemLines = status === 'REVIEW_REQUIRED'\n  ? String(q.system || '').split(/\\r?\\n/).filter((l) => /^(CHECK|GENERATION ERROR):/.test(l)).slice(0, 40) : [];\nconst notes = [...systemLines, String(q.notes || '').slice(0, 2000)].filter(Boolean).join('\\n');\nreturn [{ json: { id, status, notes, statusUpdatedAt: new Date().toISOString() } }];\n"
+      },
+      "id": "7944b54c-6c08-59eb-b177-e7be12cf7c87",
+      "name": "Validate Status Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "job_hunt_jobs"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyValue": "={{ $json.id }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "={{ $json.status }}",
+            "notes": "={{ $json.notes }}",
+            "statusUpdatedAt": "={{ $json.statusUpdatedAt }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "statusUpdatedAt",
+              "displayName": "statusUpdatedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d7ddd379-520f-5833-a760-88cf1fdca66c",
+      "name": "Update Job Status",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        448,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const id = $('Validate Status Update').first().json.id;\nconst url = `http://localhost:5678/webhook/job-hunt/job?id=${id}`;\nreturn [{ json: { html: `<!doctype html><meta http-equiv=\"refresh\" content=\"0;url=${url}\"><a href=\"${url}\">Saved — back to job</a>` } }];\n"
+      },
+      "id": "fcd5b2dd-2939-550b-a711-5c1d7cdee38b",
+      "name": "Build Redirect",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "9134d483-d52e-5966-8e32-f19b4ebd8b3b",
+      "name": "Respond Status Saved",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        512
+      ]
+    }
+  ],
+  "connections": {
+    "List Jobs Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get All Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Jobs": {
+      "main": [
+        [
+          {
+            "node": "Render Job List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Job List": {
+      "main": [
+        [
+          {
+            "node": "Respond Job List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Detail Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Job": {
+      "main": [
+        [
+          {
+            "node": "Render Job Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Job Page": {
+      "main": [
+        [
+          {
+            "node": "Respond Job Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Status Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Status Update": {
+      "main": [
+        [
+          {
+            "node": "Update Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Job Status": {
+      "main": [
+        [
+          {
+            "node": "Build Redirect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Redirect": {
+      "main": [
+        [
+          {
+            "node": "Respond Status Saved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "binaryMode": "separate"
+  },
+  "tags": [],
+  "active": false,
+  "pinData": {}
+}
